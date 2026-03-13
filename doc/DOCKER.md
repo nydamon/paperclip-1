@@ -93,6 +93,38 @@ Notes:
 - Without API keys, the app still runs normally.
 - Adapter environment checks in Paperclip will surface missing auth/CLI prerequisites.
 
+## VPS Production Deployment
+
+For production deployment to a VPS with automated CI/CD, use the dedicated VPS setup:
+
+```sh
+# Production deployment (automated via GitHub Actions)
+# See doc/VPS-DEPLOYMENT.md for full details
+```
+
+**Key differences from local quickstart:**
+
+| Aspect | Local Quickstart | VPS Production |
+|--------|-----------------|----------------|
+| Compose file | `docker-compose.quickstart.yml` | `docker-compose.vps.yml` |
+| Dockerfile | `Dockerfile` (full build) | `Dockerfile.vps` (fast, uses prebuilt `ui/dist`) |
+| Database | Exposed on host port 5432 | Internal only (not exposed) |
+| OpenCode | Optional | Required with API keys |
+| Public URL | Defaults to localhost | Must be explicit external URL |
+
+**Files:**
+- `docker-compose.vps.yml` - Production orchestration
+- `Dockerfile.vps` - Optimized build for VPS (expects prebuilt UI)
+- `.github/workflows/deploy-vultr.yml` - GitHub Actions CI/CD
+- `scripts/docker-entrypoint.sh` - Container bootstrap
+
+See [VPS-DEPLOYMENT.md](VPS-DEPLOYMENT.md) for complete setup instructions including:
+- Required GitHub secrets
+- VPS environment configuration
+- SSH key setup
+- Deployment validation
+- Recovery procedures
+
 ## Onboard Smoke Test (Ubuntu + npm only)
 
 Use this when you want to mimic a fresh machine that only has Ubuntu + npm and verify:
