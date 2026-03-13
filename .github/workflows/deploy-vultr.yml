@@ -279,7 +279,7 @@ jobs:
                 exit 1
                 ;;
             esac
-            printf "PUBLIC_URL_VALID:%s\n" "$public_url"
+            printf "PUBLIC_URL_VALID:%s\n" "$public_url"'
 
       - name: Read recent startup logs
         run: |
