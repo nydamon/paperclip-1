@@ -279,14 +279,7 @@ jobs:
                 exit 1
                 ;;
             esac
-            case "$public_url" in
-              http://$VULTR_HOST|http://$VULTR_HOST:*|https://$VULTR_HOST|https://$VULTR_HOST:*)
-                printf "MATCHES_DEPLOY_HOST:%s\n" "$public_url"
-                ;;
-              *)
-                printf "NONLOCAL_PUBLIC_URL:%s\n" "$public_url"
-                ;;
-            esac'
+            printf "PUBLIC_URL_VALID:%s\n" "$public_url"
 
       - name: Read recent startup logs
         run: |
