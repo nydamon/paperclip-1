@@ -523,6 +523,8 @@ export async function startServer(): Promise<StartedServer> {
         .then((result) => {
           if (result.enqueued > 0) {
             logger.info({ ...result }, "heartbeat timer tick enqueued runs");
+          } else if (result.skipped > 0) {
+            logger.info({ ...result }, "heartbeat timer tick: due agents skipped (no open tasks)");
           }
         })
         .catch((err) => {
