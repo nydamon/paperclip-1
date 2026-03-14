@@ -331,3 +331,77 @@ rm -f /tmp/gen-secrets.mjs
 - `nydamon` — org admin
 - `viraforge-ai` — org member (added 2026-03-14)
 - The correct org name is `viraforge` (not `viraforge-labs` — that org does not exist)
+
+---
+
+## Connie Wallet Custody Chain (Phase 1)
+
+Imported March 2026. Do not rotate or revoke without board approval.
+
+### Asset facts
+
+| Field | Value |
+|-------|-------|
+| Address | `0xa2e4B81f2CD154A0857b280754507f369eD685ba` |
+| Network | Base mainnet (chain ID `8453`) |
+| Token | USDbC (`0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA`) |
+| Balance at import | ~`$10.08 USDbC` |
+| Source | Connie VPS `/root/.automaton-research-home/.automaton/wallet.json` |
+| Owner | DLD Ent. board |
+
+### Paperclip secret
+
+| Field | Value |
+|-------|-------|
+| Secret name | `connie-wallet-private-key` |
+| Secret ID | `bf9909ac-eb5a-452e-8bdb-e2d39194070f` |
+| Provider | `local_encrypted` (AES-256-GCM, master key in `paperclip-server-1`) |
+| Company ID | `f6b6dbaa-8d6f-462a-bde7-3d277116b4fb` (DLD Ent.) |
+
+### Agent binding policy
+
+| Env key | Type | Authorized agents |
+|---------|------|-------------------|
+| `CONNIE_WALLET_PRIVATE_KEY` | `secret_ref` | Treasury Operator (`d6f1aff9-8a41-4225-8ff2-fabc07e3476d`) only |
+| `CONNIE_WALLET_ADDRESS` | `plain` | Any agent referencing wallet publicly |
+| `CONNIE_WALLET_CHAIN_ID` | `plain` | Any agent |
+| `CONNIE_WALLET_NETWORK` | `plain` | Any agent |
+| `CONNIE_WALLET_TOKEN_CONTRACT` | `plain` | Any agent |
+
+Only the CEO role can add or remove `secret_ref` bindings via `PATCH /api/agents/:id/permissions`.
+
+### Wallet helper code
+
+- `server/src/wallet/connie-wallet.ts` — `getAddressFromKey`, `validateWalletEnv`, `signMessageWithEnvKey`
+- `server/src/wallet/signer-service.ts` — `SignerService` interface + phase-1 env shim; phase-2 target
+
+### Revocation procedure
+
+To stop signing access without destroying the secret:
+
+```bash
+# Remove secret_ref from Treasury Operator env (patch via DB or CEO-auth API)
+ssh -i "/Users/damondecrescenzo/.ssh/paperclip-gha-deploy" root@64.176.199.162 \
+  "docker exec paperclip-db-1 psql -U paperclip paperclip \
+    -c \"UPDATE agents SET adapter_config = adapter_config #- '{env,CONNIE_WALLET_PRIVATE_KEY}', updated_at = now() \
+         WHERE id = 'd6f1aff9-8a41-4225-8ff2-fabc07e3476d';\""
+
+# Confirm the key is gone from the agent env
+docker exec paperclip-db-1 psql -U paperclip paperclip -t \
+  -c "SELECT adapter_config->'env' FROM agents WHERE id='d6f1aff9-8a41-4225-8ff2-fabc07e3476d';"
+```
+
+The encrypted secret record is preserved for recovery. Delete the `company_secrets` row only if compromise is confirmed.
+
+### Key rotation procedure
+
+1. Generate a new EVM wallet on a secure, air-gapped machine.
+2. Fund from current address via a Base bridge or direct transfer.
+3. Import new key as a new version of `connie-wallet-private-key` via the gen-secrets script.
+4. Update `CONNIE_WALLET_ADDRESS` plain value on all agents.
+5. Confirm new address is resolving correctly in heartbeat logs.
+6. Remove old key version (retain record; delete sensitive material only).
+
+### Phase-2 migration path
+
+See `server/src/wallet/signer-service.ts` for the `SignerService` interface. Phase-2 removes `CONNIE_WALLET_PRIVATE_KEY` from agent env entirely; agents call the signer service endpoint and never see the raw key.
