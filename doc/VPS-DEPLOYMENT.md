@@ -168,12 +168,17 @@ The deployment validates:
 
 1. **Check GitHub Actions logs** for specific failure reason
 2. **Verify VPS is reachable**: `ssh root@64.176.199.162`
-3. **Check container status**:
+3. **Identify the active release directory**:
    ```bash
-   docker compose -f docker-compose.vps.yml ps
+   CURRENT_RELEASE=$(ls -td /opt/paperclip/releases/* | head -1)
+   printf 'CURRENT_RELEASE=%s\n' "$CURRENT_RELEASE"
+   ```
+4. **Check container status**:
+   ```bash
+   docker compose --project-name paperclip --env-file /opt/paperclip/.env -f "$CURRENT_RELEASE/docker-compose.vps.yml" ps
    docker logs paperclip-server-1
    ```
-4. **Database is backed up** before each deploy in `/opt/paperclip/db-backups/`
+5. **Database is backed up** before each deploy in `/opt/paperclip/db-backups/`
 
 ### Manual Recovery
 
@@ -183,19 +188,22 @@ If the automated deploy leaves the system in a bad state:
 # SSH to VPS
 ssh root@64.176.199.162
 
-cd /opt/paperclip
+CURRENT_RELEASE=$(ls -td /opt/paperclip/releases/* | head -1)
+printf 'CURRENT_RELEASE=%s\n' "$CURRENT_RELEASE"
 
 # Check status
-docker compose -f docker-compose.vps.yml ps
+docker compose --project-name paperclip --env-file /opt/paperclip/.env -f "$CURRENT_RELEASE/docker-compose.vps.yml" ps
 
 # View logs
 docker logs paperclip-server-1
 
 # Restart services
-docker compose -f docker-compose.vps.yml restart
+docker compose --project-name paperclip --env-file /opt/paperclip/.env -f "$CURRENT_RELEASE/docker-compose.vps.yml" restart
 
 # Or recreate from last known good release
-# (find a recent release directory and deploy manually)
+# (set TARGET_RELEASE to a prior directory under /opt/paperclip/releases/)
+# TARGET_RELEASE=/opt/paperclip/releases/<sha>-<run_id>-<attempt>
+# docker compose --project-name paperclip --env-file /opt/paperclip/.env -f "$TARGET_RELEASE/docker-compose.vps.yml" up -d --force-recreate --no-deps server
 ```
 
 ### Restoring from Backup
