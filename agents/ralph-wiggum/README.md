@@ -2,6 +2,11 @@
 
 This directory contains the portable instructions file for the `Ralph Wiggum` agent.
 
+There are two related setup modes:
+
+- **Local `claude_local` setup:** point `adapterConfig.instructionsFilePath` at the absolute path to `agents/ralph-wiggum/AGENTS.md`
+- **Portable import/export setup:** keep this file in `agents/ralph-wiggum/AGENTS.md`; Paperclip portability packages the markdown itself and strips machine-local `instructionsFilePath` values on import
+
 ## Intended Agent Shape
 
 - **Name:** `Ralph Wiggum`
@@ -13,13 +18,27 @@ This directory contains the portable instructions file for the `Ralph Wiggum` ag
 
 ## Instructions Path
 
-Point the agent's instructions file at the absolute path to this file, for example:
+For a local `claude_local` agent, point the agent's instructions file at the absolute path to this file, for example:
 
 ```text
 /absolute/path/to/paperclip/agents/ralph-wiggum/AGENTS.md
 ```
 
-For `claude_local`, this should populate `adapterConfig.instructionsFilePath`.
+This should populate `adapterConfig.instructionsFilePath`.
+
+## Working Directory
+
+Set `adapterConfig.cwd` to the repo root or worktree Ralph is expected to review, for example:
+
+```text
+/absolute/path/to/paperclip
+```
+
+Without an explicit `cwd` or attached workspace, `claude_local` falls back to the Paperclip server process directory, which is too brittle for roadmap or repository-aware reviews.
+
+## Portability Note
+
+For company import/export, this file should remain at `agents/ralph-wiggum/AGENTS.md` with `kind: agent` frontmatter. Portable imports use the markdown body as the imported prompt content and intentionally remove machine-local `instructionsFilePath` values.
 
 ## Recommended Runtime Defaults
 
