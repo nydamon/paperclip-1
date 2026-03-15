@@ -35,7 +35,7 @@ FROM base AS production
 WORKDIR /app
 COPY --chown=node:node --from=build /app /app
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends openssh-client \
+  && apt-get install -y --no-install-recommends jq openssh-client tmux \
   && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /paperclip /opt/paperclip-opencode \
   && npm install --global --omit=dev @anthropic-ai/claude-code@latest @google/gemini-cli@latest @openai/codex@latest \

@@ -10,6 +10,11 @@ The deployment uses:
 - **Immutable release directories** for safe, reproducible deployments
 - **SSH key authentication** between GitHub Actions and the VPS
 
+Repository source of truth for VPS deploys:
+- **Deploy from `origin`**: `git@github.com:viraforge/paperclip.git`
+- **Track upstream separately**: `git@github.com:paperclipai/paperclip.git`
+- Do not treat an older personal fork as the production deployment source
+
 ## Architecture
 
 ```
@@ -93,7 +98,7 @@ MINIMAX_API_KEY=<your_minimax_api_key>
 ### Trigger
 
 The workflow runs automatically on:
-- Push to `master` branch
+- Push to `master` branch on the `viraforge/paperclip` repository
 - Manual trigger via `workflow_dispatch`
 
 ### Steps
