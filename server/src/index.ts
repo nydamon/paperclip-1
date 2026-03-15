@@ -517,6 +517,11 @@ export async function startServer(): Promise<StartedServer> {
       logger.error({ err }, "startup reap of orphaned heartbeat runs failed");
     });
 
+    // Release any locks whose run already reached a terminal state
+    void heartbeat.expireTerminatedRunLocks().catch((err) => {
+      logger.error({ err }, "startup expiry of terminated-run locks failed");
+    });
+
     setInterval(() => {
       void heartbeat
         .tickTimers(new Date())
@@ -537,6 +542,11 @@ export async function startServer(): Promise<StartedServer> {
         .catch((err) => {
           logger.error({ err }, "periodic reap of orphaned heartbeat runs failed");
         });
+
+      // Periodically expire any locks whose run is already terminal
+      void heartbeat.expireTerminatedRunLocks().catch((err) => {
+        logger.error({ err }, "periodic expiry of terminated-run locks failed");
+      });
     }, config.heartbeatSchedulerIntervalMs);
   }
   

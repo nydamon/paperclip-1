@@ -1021,6 +1021,49 @@ export function heartbeatService(db: Db) {
     return { reaped: reaped.length, runIds: reaped };
   }
 
+  /**
+   * Release execution locks on issues whose associated run has already reached
+   * a terminal state (succeeded / failed / cancelled / timed_out).
+   *
+   * This is a safety net for the gap between `setRunStatus` and
+   * `releaseIssueExecutionAndPromote` — e.g. if the server crashed in that
+   * window the issue would be permanently stuck with a stale lock.
+   *
+   * Safe to call repeatedly; it is idempotent because
+   * `releaseIssueExecutionAndPromote` checks the current `executionRunId`
+   * inside a transaction.
+   */
+  async function expireTerminatedRunLocks() {
+    const terminalStatuses = ["succeeded", "failed", "cancelled", "timed_out"];
+
+    const rows = await db
+      .select({ run: heartbeatRuns })
+      .from(issues)
+      .innerJoin(heartbeatRuns, eq(issues.executionRunId, heartbeatRuns.id))
+      .where(inArray(heartbeatRuns.status, terminalStatuses));
+
+    const released: string[] = [];
+    for (const { run } of rows) {
+      try {
+        await releaseIssueExecutionAndPromote(run);
+        released.push(run.id);
+      } catch (err) {
+        logger.error(
+          { err, runId: run.id },
+          "failed to release stale execution lock for terminated run",
+        );
+      }
+    }
+
+    if (released.length > 0) {
+      logger.warn(
+        { releasedCount: released.length, runIds: released },
+        "expired stale execution locks held by terminated runs",
+      );
+    }
+    return { released: released.length, runIds: released };
+  }
+
   async function updateRuntimeState(
     agent: typeof agents.$inferSelect,
     run: typeof heartbeatRuns.$inferSelect,
@@ -2447,6 +2490,8 @@ export function heartbeatService(db: Db) {
     wakeup: enqueueWakeup,
 
     reapOrphanedRuns,
+
+    expireTerminatedRunLocks,
 
     tickTimers: async (now = new Date()) => {
       const allAgents = await db.select().from(agents);
