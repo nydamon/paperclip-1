@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { constants as fsConstants, promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 export interface RunProcessResult {
@@ -121,6 +122,48 @@ export function buildPaperclipEnv(agent: { id: string; companyId: string }): Rec
   const apiUrl = process.env.PAPERCLIP_API_URL ?? `http://${runtimeHost}:${runtimePort}`;
   vars.PAPERCLIP_API_URL = apiUrl;
   return vars;
+}
+
+// ---------------------------------------------------------------------------
+// Local-agent filesystem env contract
+// ---------------------------------------------------------------------------
+
+/**
+ * Apply per-agent filesystem isolation to an env dict.
+ *
+ * Sets (only if not already present, so adapterConfig.env overrides are respected):
+ * - `AGENT_HOME` → `$PAPERCLIP_HOME/instances/<id>/workspaces/<agentId>`
+ *   A stable, agent-scoped path agents can use for their own state.
+ *   HOME is intentionally NOT overridden — tools like opencode, claude, and
+ *   codex resolve auth/config via `~` which must remain the global home.
+ * - `TMPDIR`, `TMP`, `TEMP` → `$PAPERCLIP_HOME/instances/<id>/tmp/<agentId>`
+ *   Prevents cross-agent temp file collisions.
+ */
+export function applyLocalAgentFilesystemEnv(
+  env: Record<string, string>,
+  opts: { agentId: string },
+): Record<string, string> {
+  const rawHome = process.env.PAPERCLIP_HOME?.trim();
+  const paperclipHome = rawHome
+    ? rawHome === "~"
+      ? os.homedir()
+      : rawHome.startsWith("~/")
+        ? path.resolve(os.homedir(), rawHome.slice(2))
+        : path.resolve(rawHome)
+    : path.resolve(os.homedir(), ".paperclip");
+
+  const instanceId = (process.env.PAPERCLIP_INSTANCE_ID?.trim()) || "default";
+  const instanceRoot = path.join(paperclipHome, "instances", instanceId);
+
+  const agentHome = path.join(instanceRoot, "workspaces", opts.agentId);
+  if (!env.AGENT_HOME) env.AGENT_HOME = agentHome;
+
+  const tmpRoot = path.join(instanceRoot, "tmp", opts.agentId);
+  if (!env.TMPDIR) env.TMPDIR = tmpRoot;
+  if (!env.TMP) env.TMP = tmpRoot;
+  if (!env.TEMP) env.TEMP = tmpRoot;
+
+  return env;
 }
 
 export function defaultPathForPlatform() {
