@@ -36,8 +36,30 @@ jobs:
           echo "No upstream changes detected; skipping PR update."
           cat .upstream-sync-summary.md
 
-      - name: Open or update integration PR
+      - name: Check remote integration branch delta
+        id: remote-delta
         if: ${{ hashFiles('.upstream-sync-noop') == '' }}
+        run: |
+          set -euo pipefail
+          if ! git ls-remote --exit-code origin refs/heads/integration/upstream-sync > /dev/null; then
+            echo "has_delta=false" >> "$GITHUB_OUTPUT"
+            echo "integration/upstream-sync does not exist on origin; skipping PR operation."
+            exit 0
+          fi
+
+          git fetch origin master integration/upstream-sync
+          ahead_count=$(git rev-list --count origin/master..origin/integration/upstream-sync)
+          echo "integration_branch_ahead_count=$ahead_count"
+          if [ "$ahead_count" = "0" ]; then
+            echo "has_delta=false" >> "$GITHUB_OUTPUT"
+            echo "No commits ahead of master on integration/upstream-sync; skipping PR operation."
+            exit 0
+          fi
+
+          echo "has_delta=true" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update integration PR
+        if: ${{ hashFiles('.upstream-sync-noop') == '' && steps.remote-delta.outputs.has_delta == 'true' }}
         env:
           GH_TOKEN: ${{ env.SYNC_TOKEN }}
         run: |
