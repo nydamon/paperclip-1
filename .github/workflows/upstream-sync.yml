@@ -13,13 +13,15 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      SYNC_TOKEN: ${{ secrets.UPSTREAM_SYNC_GH_TOKEN != '' && secrets.UPSTREAM_SYNC_GH_TOKEN || github.token }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ env.SYNC_TOKEN }}
 
       - name: Run upstream sync
         run: |
@@ -37,7 +39,7 @@ jobs:
       - name: Open or update integration PR
         if: ${{ hashFiles('.upstream-sync-noop') == '' }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ env.SYNC_TOKEN }}
         run: |
           set -euo pipefail
           existing_number=$(gh pr list \
@@ -52,8 +54,21 @@ jobs:
             exit 0
           fi
 
-          gh pr create \
+          set +e
+          create_output=$(gh pr create \
             --base master \
             --head integration/upstream-sync \
             --title "chore: upstream sync $(date +%Y-%m-%d)" \
-            --body "$(cat .upstream-sync-summary.md)"
+            --body "$(cat .upstream-sync-summary.md)" 2>&1)
+          create_exit=$?
+          set -e
+
+          if [ "$create_exit" -ne 0 ]; then
+            printf '%s\n' "$create_output" >&2
+            if echo "$create_output" | grep -q "Resource not accessible by integration"; then
+              echo "Set repository secret UPSTREAM_SYNC_GH_TOKEN to a token with pull-request write access." >&2
+            fi
+            exit "$create_exit"
+          fi
+
+          printf '%s\n' "$create_output"
