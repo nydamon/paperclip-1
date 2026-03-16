@@ -77,6 +77,11 @@ jobs:
           name: ui-dist
           path: ui/dist
 
+      - name: Deploy guard (clean tree + pinned commit)
+        run: |
+          set -euo pipefail
+          ./scripts/deploy-guard.sh --require-ref "${GITHUB_SHA}" --allow-detached-head
+
       - name: Configure SSH key
         run: |
           set -euo pipefail

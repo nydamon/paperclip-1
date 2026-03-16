@@ -113,6 +113,7 @@ The workflow runs automatically on:
 
 2. **Deploy Job** (after verify succeeds):
    - Download `ui/dist` artifact
+   - Run deploy guard (`./scripts/deploy-guard.sh --require-ref "$GITHUB_SHA" --allow-detached-head`)
    - Configure SSH with connection reuse
    - Create immutable release directory on VPS
    - Sync repository to release directory
@@ -205,6 +206,16 @@ docker compose --project-name paperclip --env-file /opt/paperclip/.env -f "$CURR
 # TARGET_RELEASE=/opt/paperclip/releases/<sha>-<run_id>-<attempt>
 # docker compose --project-name paperclip --env-file /opt/paperclip/.env -f "$TARGET_RELEASE/docker-compose.vps.yml" up -d --force-recreate --no-deps server
 ```
+
+### Manual Deploy Preflight (Required)
+
+If you run a manual deploy from a local checkout, always run:
+
+```bash
+./scripts/deploy-guard.sh --require-ref "$(git rev-parse HEAD)"
+```
+
+This blocks deployments from dirty worktrees (including untracked files), which prevents hidden VPS-only customizations from drifting away from git history.
 
 ### Restoring from Backup
 
