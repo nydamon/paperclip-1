@@ -87,6 +87,10 @@ jobs:
 
           if [ "$create_exit" -ne 0 ]; then
             printf '%s\n' "$create_output" >&2
+            if echo "$create_output" | grep -q "No commits between master and integration/upstream-sync"; then
+              echo "No net upstream integration diff to open as PR; treating as successful no-op."
+              exit 0
+            fi
             if echo "$create_output" | grep -q "Resource not accessible by integration"; then
               echo "Set repository secret UPSTREAM_SYNC_GH_TOKEN to a token with pull-request write access." >&2
             fi
