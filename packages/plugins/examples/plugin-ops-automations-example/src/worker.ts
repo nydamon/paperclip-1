@@ -21,6 +21,7 @@ interface OpsConfig {
   pushAutoRouteEnabled?: boolean;
   healthMonitorEnabled?: boolean;
   batchPushSweepEnabled?: boolean;
+  enableParentAutoClose?: boolean;
 }
 
 async function getConfig(ctx: PluginContext): Promise<OpsConfig> {
@@ -122,6 +123,71 @@ async function handleAutoUnblock(
         trigger: completedIdentifier,
       });
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// H1b — Parent Auto-Close Handler
+// ---------------------------------------------------------------------------
+
+const TERMINAL_STATUSES = new Set(["done", "cancelled"]);
+const CLOSEABLE_PARENT_STATUSES = new Set(["in_progress", "in_review"]);
+
+async function handleParentAutoClose(
+  ctx: PluginContext,
+  issueId: string,
+  companyId: string,
+): Promise<void> {
+  const issue = await ctx.issues.get(issueId, companyId);
+  if (!issue?.parentId) return;
+
+  const parent = await ctx.issues.get(issue.parentId, companyId);
+  if (!parent) return;
+
+  // Only auto-close parents that are in a closeable status
+  if (!CLOSEABLE_PARENT_STATUSES.has(parent.status)) return;
+
+  // Fetch all issues in the company and filter for siblings (same parentId)
+  const allIssues = await ctx.issues.list({ companyId });
+  const siblings = allIssues.filter((i) => i.parentId === parent.id);
+
+  if (siblings.length === 0) return;
+
+  let doneCount = 0;
+  let cancelledCount = 0;
+
+  for (const sibling of siblings) {
+    if (!TERMINAL_STATUSES.has(sibling.status)) {
+      // At least one sibling is not terminal — do not auto-close
+      return;
+    }
+    if (sibling.status === "done") doneCount++;
+    else cancelledCount++;
+  }
+
+  // All siblings are done or cancelled — close the parent
+  await ctx.issues.update(parent.id, { status: "done" }, companyId);
+  await ctx.issues.createComment(
+    parent.id,
+    `**Auto-closed:** all child tasks complete (${doneCount} done, ${cancelledCount} cancelled).`,
+    companyId,
+  );
+  await ctx.activity.log({
+    companyId,
+    message: `Auto-closed ${parent.identifier ?? parent.id}: all ${siblings.length} children terminal (${doneCount} done, ${cancelledCount} cancelled)`,
+    entityType: "issue",
+    entityId: parent.id,
+  });
+  ctx.logger.info("Parent auto-closed", {
+    parentId: parent.id,
+    parentIdentifier: parent.identifier,
+    doneCount,
+    cancelledCount,
+  });
+
+  // Recurse: check if the parent itself has a parent
+  if (parent.parentId) {
+    await handleParentAutoClose(ctx, parent.id, companyId);
   }
 }
 
@@ -383,12 +449,9 @@ async function runBatchPushSweep(
 
 const plugin = definePlugin({
   async setup(ctx) {
-    // H1 — Auto-Unblock: fires when any issue transitions to done
+    // H1 — Auto-Unblock + H1b — Parent Auto-Close: fire when any issue transitions to done
     ctx.events.on("issue.updated", async (event) => {
       await ensureCompanyId(ctx, event.companyId);
-
-      const config = await getConfig(ctx);
-      if (config.autoUnblockEnabled === false) return;
 
       const payload = event.payload as Record<string, unknown> | undefined;
       // Only act when status changed to "done"
@@ -397,7 +460,15 @@ const plugin = definePlugin({
       const issueId = event.entityId;
       if (!issueId) return;
 
-      await handleAutoUnblock(ctx, issueId, event.companyId);
+      const config = await getConfig(ctx);
+
+      if (config.autoUnblockEnabled !== false) {
+        await handleAutoUnblock(ctx, issueId, event.companyId);
+      }
+
+      if (config.enableParentAutoClose !== false) {
+        await handleParentAutoClose(ctx, issueId, event.companyId);
+      }
     });
 
     // H2 — Push Auto-Route: fires when a new issue is created

@@ -73,6 +73,13 @@ const manifest: PaperclipPluginManifestV1 = {
           "Periodically assign unassigned push tasks to the Senior Platform Engineer.",
         default: true,
       },
+      enableParentAutoClose: {
+        type: "boolean",
+        title: "Enable Parent Auto-Close",
+        description:
+          "Automatically close parent issues when all child tasks are done or cancelled.",
+        default: true,
+      },
     },
   },
 };
