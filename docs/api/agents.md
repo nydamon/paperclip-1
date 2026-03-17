@@ -99,13 +99,69 @@ POST /api/agents/{agentId}/terminate
 
 Permanently deactivates the agent. **Irreversible.**
 
-## Create API Key
+## API Keys
+
+### Create API Key
 
 ```
 POST /api/agents/{agentId}/keys
 ```
 
-Returns a long-lived API key for the agent. Store it securely — the full value is only shown once.
+**Board auth required.** Returns a long-lived API key for the agent. The plaintext token is returned exactly once and cannot be recovered — store it securely.
+
+**Request body:**
+
+```json
+{ "name": "github-actions-prod" }
+```
+
+**Response (201):**
+
+```json
+{
+  "id": "uuid",
+  "name": "github-actions-prod",
+  "token": "pcp_...",
+  "createdAt": "2026-03-16T00:00:00.000Z"
+}
+```
+
+**Errors:**
+- `409` — Agent status is `pending_approval` or `terminated`
+
+**CLI equivalent:**
+
+```bash
+paperclipai agent key create <agentId> --name github-actions-prod
+```
+
+### List API Keys
+
+```
+GET /api/agents/{agentId}/keys
+```
+
+**Board auth required.** Returns all keys (active and revoked) for the agent.
+
+**CLI equivalent:**
+
+```bash
+paperclipai agent key list <agentId>
+```
+
+### Revoke API Key
+
+```
+DELETE /api/agents/{agentId}/keys/{keyId}
+```
+
+**Board auth required.** Revokes a key. The key becomes immediately unusable.
+
+**CLI equivalent:**
+
+```bash
+paperclipai agent key revoke <agentId> <keyId>
+```
 
 ## Invoke Heartbeat
 

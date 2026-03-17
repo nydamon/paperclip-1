@@ -312,4 +312,99 @@ export function registerAgentCommands(program: Command): void {
       }),
     { includeCompany: false },
   );
+
+  // ── agent key <create|list|revoke> ──────────────────────────────
+  const key = agent.command("key").description("Manage agent API keys");
+
+  addCommonClientOptions(
+    key
+      .command("create")
+      .description("Create a long-lived API key for an agent")
+      .argument("<agentId>", "Agent ID")
+      .option("-n, --name <name>", "Key label", "default")
+      .action(async (agentId: string, opts: BaseClientOptions & { name: string }) => {
+        try {
+          const ctx = resolveCommandContext(opts);
+          const created = await ctx.api.post<CreatedAgentKey>(`/api/agents/${encodeURIComponent(agentId)}/keys`, {
+            name: opts.name,
+          });
+          if (!created) {
+            throw new Error("Failed to create API key");
+          }
+
+          if (ctx.json) {
+            printOutput(created, { json: true });
+            return;
+          }
+
+          console.log(`Key created: ${created.name} (${created.id})`);
+          console.log(`Token (shown once): ${created.token}`);
+        } catch (err) {
+          handleCommandError(err);
+        }
+      }),
+  );
+
+  addCommonClientOptions(
+    key
+      .command("list")
+      .description("List API keys for an agent")
+      .argument("<agentId>", "Agent ID")
+      .action(async (agentId: string, opts: BaseClientOptions) => {
+        try {
+          const ctx = resolveCommandContext(opts);
+          const keys = await ctx.api.get<Array<{ id: string; name: string; createdAt: string; revokedAt: string | null }>>(
+            `/api/agents/${encodeURIComponent(agentId)}/keys`,
+          );
+
+          if (ctx.json) {
+            printOutput(keys, { json: true });
+            return;
+          }
+
+          if (!keys || keys.length === 0) {
+            printOutput([], { json: false });
+            return;
+          }
+
+          for (const k of keys) {
+            console.log(
+              formatInlineRecord({
+                id: k.id,
+                name: k.name,
+                createdAt: k.createdAt,
+                status: k.revokedAt ? "revoked" : "active",
+              }),
+            );
+          }
+        } catch (err) {
+          handleCommandError(err);
+        }
+      }),
+  );
+
+  addCommonClientOptions(
+    key
+      .command("revoke")
+      .description("Revoke an agent API key")
+      .argument("<agentId>", "Agent ID")
+      .argument("<keyId>", "Key ID to revoke")
+      .action(async (agentId: string, keyId: string, opts: BaseClientOptions) => {
+        try {
+          const ctx = resolveCommandContext(opts);
+          await ctx.api.delete<{ ok: true }>(
+            `/api/agents/${encodeURIComponent(agentId)}/keys/${encodeURIComponent(keyId)}`,
+          );
+
+          if (ctx.json) {
+            printOutput({ ok: true }, { json: true });
+            return;
+          }
+
+          console.log(`Key ${keyId} revoked.`);
+        } catch (err) {
+          handleCommandError(err);
+        }
+      }),
+  );
 }
