@@ -42,7 +42,8 @@ ARG OPENCODE_VERSION=0.1.117
 ARG COMMIT_SHA=unknown
 LABEL org.opencontainers.image.revision=$COMMIT_SHA
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends jq openssh-client tmux \
+  && apt-get install -y --no-install-recommends jq openssh-client tmux ripgrep fd-find procps tree patch \
+  && ln -s /usr/bin/fdfind /usr/local/bin/fd \
   && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /paperclip /opt/paperclip-opencode \
   && npm install --global --omit=dev \

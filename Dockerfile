@@ -36,7 +36,8 @@ FROM base AS production
 WORKDIR /app
 COPY --chown=node:node --from=build /app /app
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends openssh-client \
+  && apt-get install -y --no-install-recommends openssh-client ripgrep fd-find procps tree patch \
+  && ln -s /usr/bin/fdfind /usr/local/bin/fd \
   && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /opt/paperclip-opencode /paperclip \
   && npm install --global --omit=dev @anthropic-ai/claude-code@latest @google/gemini-cli@latest @openai/codex@latest \
