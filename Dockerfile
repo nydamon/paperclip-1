@@ -35,13 +35,22 @@ RUN test -f server/dist/index.js || (echo "ERROR: server build output missing" &
 FROM base AS production
 WORKDIR /app
 COPY --chown=node:node --from=build /app /app
+ARG CLAUDE_CODE_VERSION=1.0.31
+ARG GEMINI_CLI_VERSION=0.1.12
+ARG CODEX_VERSION=0.1.2504221644
+ARG OPENCODE_VERSION=0.1.117
+ARG COMMIT_SHA=unknown
+LABEL org.opencontainers.image.revision=$COMMIT_SHA
 RUN apt-get update \
   && apt-get install -y --no-install-recommends openssh-client ripgrep fd-find procps tree patch \
   && ln -s /usr/bin/fdfind /usr/local/bin/fd \
   && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /opt/paperclip-opencode /paperclip \
-  && npm install --global --omit=dev @anthropic-ai/claude-code@latest @google/gemini-cli@latest @openai/codex@latest \
-  && npm install --prefix /opt/paperclip-opencode --omit=dev opencode-ai \
+  && npm install --global --omit=dev \
+    "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+    "@google/gemini-cli@${GEMINI_CLI_VERSION}" \
+    "@openai/codex@${CODEX_VERSION}" \
+  && npm install --prefix /opt/paperclip-opencode --omit=dev "opencode-ai@${OPENCODE_VERSION}" \
   && chmod +x /app/scripts/docker-entrypoint.sh \
   && chown -R node:node /paperclip /opt/paperclip-opencode
 
