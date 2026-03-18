@@ -16,7 +16,22 @@ import type {
   GitHubCheckRunEvent,
   GitHubWorkflowRunEvent,
 } from "./github-types.js";
+import * as sync from "./sync.js";
+import { registerTools } from "./tools.js";
 import { verifyGitHubSignature } from "./verify-signature.js";
+
+interface GitHubIssueEvent {
+  action: "opened" | "closed" | "reopened" | "edited" | "assigned" | string;
+  issue: {
+    number: number;
+    title: string;
+    body: string | null;
+    state: "open" | "closed";
+    html_url: string;
+    labels: Array<{ name: string }>;
+  };
+  repository: { full_name: string; html_url: string };
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -366,12 +381,40 @@ function buildFailureComment(
 }
 
 // ---------------------------------------------------------------------------
+// GitHub issues event handler (Phase 2 — bidirectional sync)
+// ---------------------------------------------------------------------------
+
+async function handleIssueEvent(payload: GitHubIssueEvent): Promise<void> {
+  if (!ctx) return;
+  if (payload.action !== "closed" && payload.action !== "reopened") return;
+
+  const [owner, repo] = payload.repository.full_name.split("/");
+  if (!owner || !repo) return;
+
+  const link = await sync.getLinkByGitHub(ctx, owner, repo, payload.issue.number);
+  if (!link) {
+    ctx.logger.info(
+      `No linked Paperclip issue for ${payload.repository.full_name}#${payload.issue.number}`,
+    );
+    return;
+  }
+
+  const ghState = payload.issue.state;
+  ctx.logger.info(
+    `Syncing GitHub issue state (${ghState}) to Paperclip issue ${link.paperclipIssueId}`,
+  );
+
+  await sync.syncGitHubStateToPaperclip(ctx, link, ghState);
+}
+
+// ---------------------------------------------------------------------------
 // Plugin definition
 // ---------------------------------------------------------------------------
 
 const plugin = definePlugin({
   async setup(pluginCtx) {
     ctx = pluginCtx;
+    registerTools(ctx);
     ctx.logger.info("GitHub plugin initialized");
   },
 
@@ -426,6 +469,9 @@ const plugin = definePlugin({
         break;
       case "check_run":
         await handleCheckRun(payload as GitHubCheckRunEvent);
+        break;
+      case "issues":
+        await handleIssueEvent(payload as GitHubIssueEvent);
         break;
     }
 

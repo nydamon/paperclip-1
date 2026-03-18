@@ -56,6 +56,34 @@ const manifest: PaperclipPluginManifestV1 = {
           "Agent to assign CI failure issues to when the committing agent cannot be determined.",
         default: DEFAULT_CONFIG.defaultAssigneeAgentId,
       },
+      defaultRepo: {
+        type: "string",
+        title: "Default Repository",
+        description:
+          "Default GitHub repository in owner/repo format for agent tools and issue references.",
+        default: DEFAULT_CONFIG.defaultRepo,
+      },
+      githubTokenRef: {
+        type: "string",
+        title: "GitHub Token Secret Ref",
+        description:
+          "Paperclip secret reference name (or ID) for a GitHub Personal Access Token with repo scope. Required for GitHub API calls (search, sync, agent tools).",
+        default: DEFAULT_CONFIG.githubTokenRef,
+      },
+      syncDirection: {
+        type: "string",
+        title: "Sync Direction",
+        enum: ["bidirectional", "github-to-paperclip", "paperclip-to-github"],
+        description:
+          "Direction of issue state synchronisation when a GitHub link is active.",
+        default: DEFAULT_CONFIG.syncDirection,
+      },
+      syncComments: {
+        type: "boolean",
+        title: "Sync Comments",
+        description: "When enabled, new GitHub comments are mirrored to linked Paperclip issues.",
+        default: DEFAULT_CONFIG.syncComments,
+      },
       skipSignatureVerification: {
         type: "boolean",
         title: "Skip Signature Verification",
