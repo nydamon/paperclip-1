@@ -43,8 +43,11 @@ ARG OPENCODE_VERSION=1.2.27
 ARG COMMIT_SHA=unknown
 LABEL org.opencontainers.image.revision=$COMMIT_SHA
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends openssh-client ripgrep fd-find procps tree patch \
+  && apt-get install -y --no-install-recommends gh openssh-client ripgrep fd-find procps tree patch \
   && ln -s /usr/bin/fdfind /usr/local/bin/fd \
+  && mkdir -p /usr/local/lib/paperclip \
+  && mv /usr/bin/gh /usr/local/lib/paperclip/gh-real \
+  && ln -sf /app/scripts/gh.sh /usr/bin/gh \
   && rm -rf /var/lib/apt/lists/*
 # Playwright system dependencies (required for browser-based agent tasks)
 RUN apt-get update \
@@ -61,7 +64,7 @@ RUN mkdir -p /opt/paperclip-opencode /paperclip \
     "@google/gemini-cli@${GEMINI_CLI_VERSION}" \
     "@openai/codex@${CODEX_VERSION}" \
   && npm install --prefix /opt/paperclip-opencode --omit=dev "opencode-ai@${OPENCODE_VERSION}" \
-  && chmod +x /app/scripts/docker-entrypoint.sh \
+  && chmod +x /app/scripts/docker-entrypoint.sh /app/scripts/gh.sh \
   && chown -R node:node /paperclip /opt/paperclip-opencode
 
 ENV NODE_ENV=production \
