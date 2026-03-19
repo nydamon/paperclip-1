@@ -14,4 +14,4 @@ export type {
   AdapterAgent,
   AdapterRuntime,
 } from "@paperclipai/adapter-utils";
-export { runningProcesses } from "./utils.js";
+export { runningProcesses, finishedWorkspacePaths, FINISHED_WORKSPACE_PATH_RETENTION_MS } from "./utils.js";
