@@ -6,6 +6,7 @@ export {
   type RunProcessResult,
   runningProcesses,
   finishedWorkspacePaths,
+  FINISHED_WORKSPACE_PATH_RETENTION_MS,
   MAX_CAPTURE_BYTES,
   MAX_EXCERPT_BYTES,
   parseObject,

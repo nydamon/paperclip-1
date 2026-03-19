@@ -20,7 +20,7 @@ import { conflict, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { publishLiveEvent } from "./live-events.js";
 import { getRunLogStore, type RunLogHandle } from "./run-log-store.js";
-import { getServerAdapter, runningProcesses, finishedWorkspacePaths } from "../adapters/index.js";
+import { getServerAdapter, runningProcesses, finishedWorkspacePaths, FINISHED_WORKSPACE_PATH_RETENTION_MS } from "../adapters/index.js";
 import type { AdapterExecutionResult, AdapterInvocationMeta, AdapterSessionCodec, UsageSummary } from "../adapters/index.js";
 import { createLocalAgentJwt } from "../agent-auth-jwt.js";
 import { parseObject, asBoolean, asNumber, appendWithCap, MAX_EXCERPT_BYTES } from "../adapters/utils.js";
@@ -1556,7 +1556,7 @@ export function heartbeatService(db: Db) {
     if (process.platform !== "linux") return { killed: 0 };
 
     const candidates = Array.from(finishedWorkspacePaths.entries()).filter(
-      ([, v]) => Date.now() - v.finishedAt.getTime() < 30 * 60 * 1000,
+      ([, v]) => Date.now() - v.finishedAt.getTime() < FINISHED_WORKSPACE_PATH_RETENTION_MS,
     );
     if (candidates.length === 0) return { killed: 0 };
 
@@ -2676,8 +2676,17 @@ export function heartbeatService(db: Db) {
           payload: promotedPayload,
         });
 
-        const promotionAdmission = await canEnqueueRun(deferredAgent);
-        if (!promotionAdmission.allowed) {
+        const deferredPolicy = parseHeartbeatPolicy(deferredAgent);
+        const [promotionQueueCountRow] = await tx
+          .select({ count: sql<number>`count(*)::int` })
+          .from(heartbeatRuns)
+          .where(and(eq(heartbeatRuns.agentId, deferredAgent.id), eq(heartbeatRuns.status, "queued")));
+        const promotionQueuedCount = Number(promotionQueueCountRow?.count ?? 0);
+        if (promotionQueuedCount >= deferredPolicy.maxQueuedRuns) {
+          logger.info(
+            { agentId: deferredAgent.id, wakeupId: deferred.id, promotionQueuedCount, maxQueuedRuns: deferredPolicy.maxQueuedRuns },
+            "deferred promotion suppressed by maxQueuedRuns cap; will retry on next issue release",
+          );
           return null;
         }
 
@@ -3036,8 +3045,12 @@ export function heartbeatService(db: Db) {
           return { kind: "deferred" as const };
         }
 
-        const admission = await canEnqueueRun(agent);
-        if (!admission.allowed) {
+        const [queueCountRow] = await tx
+          .select({ count: sql<number>`count(*)::int` })
+          .from(heartbeatRuns)
+          .where(and(eq(heartbeatRuns.agentId, agent.id), eq(heartbeatRuns.status, "queued")));
+        const issueScopedQueuedCount = Number(queueCountRow?.count ?? 0);
+        if (issueScopedQueuedCount >= policy.maxQueuedRuns) {
           await tx.insert(agentWakeupRequests).values({
             companyId: agent.companyId,
             agentId,
@@ -3404,7 +3417,12 @@ export function heartbeatService(db: Db) {
 
       const running = runningProcesses.get(run.id);
       if (running) {
-        try { process.kill(-running.pid, "SIGTERM"); } catch { /* process group already gone */ }
+        const { pid, graceSec } = running;
+        try { process.kill(-pid, "SIGTERM"); } catch { /* process group already gone */ }
+        const graceMs = Math.max(1, graceSec) * 1000;
+        setTimeout(() => {
+          try { process.kill(-pid, "SIGKILL"); } catch { /* process group already gone */ }
+        }, graceMs);
         runningProcesses.delete(run.id);
       }
       await releaseIssueExecutionAndPromote(run);

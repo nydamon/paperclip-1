@@ -24,7 +24,7 @@ interface FinishedWorkspacePath {
 }
 
 export const finishedWorkspacePaths = new Map<string, FinishedWorkspacePath>();
-const FINISHED_WORKSPACE_PATH_RETENTION_MS = 30 * 60 * 1000;
+export const FINISHED_WORKSPACE_PATH_RETENTION_MS = 30 * 60 * 1000;
 
 interface SpawnTarget {
   command: string;
