@@ -48,7 +48,7 @@
 ## Agent devtools in production image
 
 Both `Dockerfile` and `Dockerfile.vps` now install the following in the production image for agent efficiency:
-- `gh` — GitHub CLI, with the default `gh` entrypoints (`/usr/bin/gh` and `/paperclip/bin/gh`) wrapped to use an ephemeral `GH_CONFIG_DIR` so normal auth flows do not persist state in the shared `/paperclip` volume
+- `gh` — GitHub CLI, with the default `gh` entrypoints (`/usr/bin/gh` and `/paperclip/bin/gh`) wrapped to use an ephemeral `GH_CONFIG_DIR` so standard `gh` usage does not persist auth state in the shared `/paperclip` volume
 - `ripgrep` — fast file search (`rg`); agents prefer this over `grep` fallback
 - `fd-find` — fast file finder (`fd`, symlinked from `fdfind`)
 - `procps` — provides `ps`, `top`, etc.
@@ -57,8 +57,9 @@ Both `Dockerfile` and `Dockerfile.vps` now install the following in the producti
 
 Operational rule for `gh` inside the production container:
 - Never run `gh auth login`
-- Use `GITHUB_TOKEN` / `GH_TOKEN` env injection only
-- The default `gh` entrypoints set a fresh temp `GH_CONFIG_DIR` for each invocation, preventing reusable auth state from leaking across agents or surviving Docker updates during normal `gh` usage
+- Token exclusivity is enforced by agent env binding: only the Senior Platform Engineer receives a GitHub token
+- Expose the selected SPE-only GitHub secret as `GITHUB_TOKEN` or `GH_TOKEN` at runtime, even if the source secret is named differently (for example `GITHUB_TOKEN_VIRAFORGE`)
+- The default `gh` entrypoints set a fresh temp `GH_CONFIG_DIR` for each invocation, reducing reusable auth state leakage during normal `gh` usage across Docker updates
 - The relocated raw binary path is internal implementation detail and should not be invoked directly
 
 ## npm tool version pinning
