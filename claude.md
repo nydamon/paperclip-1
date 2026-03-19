@@ -48,11 +48,19 @@
 ## Agent devtools in production image
 
 Both `Dockerfile` and `Dockerfile.vps` now install the following in the production image for agent efficiency:
+- `gh` — GitHub CLI, with the default `gh` entrypoints (`/usr/bin/gh` and `/paperclip/bin/gh`) wrapped to use an ephemeral `GH_CONFIG_DIR` so standard `gh` usage does not persist auth state in the shared `/paperclip` volume
 - `ripgrep` — fast file search (`rg`); agents prefer this over `grep` fallback
 - `fd-find` — fast file finder (`fd`, symlinked from `fdfind`)
 - `procps` — provides `ps`, `top`, etc.
 - `tree` — directory tree display
 - `patch` — apply patch files
+
+Operational rule for `gh` inside the production container:
+- Never run `gh auth login`
+- Token exclusivity is enforced by agent env binding: only the Senior Platform Engineer receives a GitHub token
+- Expose the selected SPE-only GitHub secret as `GITHUB_TOKEN` or `GH_TOKEN` at runtime, even if the source secret is named differently (for example `GITHUB_TOKEN_VIRAFORGE`)
+- The default `gh` entrypoints set a fresh temp `GH_CONFIG_DIR` for each invocation, reducing reusable auth state leakage during normal `gh` usage across Docker updates
+- The relocated raw binary path is internal implementation detail and should not be invoked directly
 
 ## npm tool version pinning
 
