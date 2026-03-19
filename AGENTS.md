@@ -204,7 +204,42 @@ root
 
 Paste exact stdout/stderr output into the task comment when validating. Do not assume access to any server not listed here.
 
-## 11. Definition of Done
+## 11. Operational Maintenance (Platform / Release)
+
+These are the three CI actions that are **independent of each other** and all manual:
+
+| Action | Command |
+|--------|---------|
+| Deploy app to VPS | `gh workflow run deploy-vultr.yml --repo Viraforge/paperclip --ref master` |
+| Publish canary to npm | `gh workflow run release.yml --repo Viraforge/paperclip --ref master -f channel=canary` |
+| Publish stable to npm | `gh workflow run release.yml --repo Viraforge/paperclip --ref master -f channel=stable` |
+
+Canary also publishes automatically on a nightly schedule (02:00 UTC). No action required unless an on-demand canary is needed.
+
+### Drift check
+
+`deploy-drift-check.yml` runs on a schedule and compares the SHA on `master` with the SHA deployed on the VPS. If they differ, the check fails. **This is expected behavior** — it means `master` has commits that have not been deployed yet. Fix by running `deploy-vultr.yml`. Do not disable or suppress the drift check.
+
+### Lockfile refresh
+
+`pnpm-lock.yaml` must never be committed directly in a PR (`pr-policy` blocks it). The correct path when the lockfile is stale:
+
+1. Trigger: `gh workflow run refresh-lockfile.yml --repo Viraforge/paperclip --ref master`
+2. The workflow pushes updated lockfile to branch `chore/refresh-lockfile` but **cannot create the PR** (GitHub Actions lacks PR creation permission in this repo).
+3. Open the PR manually:
+   ```bash
+   gh pr create --repo Viraforge/paperclip \
+     --head chore/refresh-lockfile --base master \
+     --title "chore(lockfile): refresh pnpm-lock.yaml" \
+     --body "Auto-generated lockfile refresh."
+   ```
+4. Post `ai-review/verdict` status, then merge. The `pr-policy` check has a built-in exception for this branch.
+
+### npm package scope
+
+All packages are scoped `@paperclipai_dld/` (npm org: `paperclipai_dld`). Do not rename to `@paperclipai/` — that scope is owned by a third party on npm. The CLI binary name (`paperclipai`) is independent of the package name (`@paperclipai_dld/cli`) and should not change.
+
+## 12. Definition of Done
 
 A change is done when all are true:
 
