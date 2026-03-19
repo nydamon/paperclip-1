@@ -43,7 +43,7 @@ import {
   Fingerprint,
   type LucideIcon,
 } from "lucide-react";
-import { AGENT_ICON_NAMES, type AgentIconName } from "@paperclipai/shared";
+import { AGENT_ICON_NAMES, type AgentIconName } from "@paperclipai_dld/shared";
 import {
   Popover,
   PopoverContent,

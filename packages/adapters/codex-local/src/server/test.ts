@@ -2,7 +2,7 @@ import type {
   AdapterEnvironmentCheck,
   AdapterEnvironmentTestContext,
   AdapterEnvironmentTestResult,
-} from "@paperclipai/adapter-utils";
+} from "@paperclipai_dld/adapter-utils";
 import {
   asString,
   asBoolean,
@@ -12,7 +12,7 @@ import {
   ensureCommandResolvable,
   ensurePathInEnv,
   runChildProcess,
-} from "@paperclipai/adapter-utils/server-utils";
+} from "@paperclipai_dld/adapter-utils/server-utils";
 import path from "node:path";
 import { parseCodexJsonl } from "./parse.js";
 

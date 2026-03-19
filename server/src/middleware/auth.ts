@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import type { Request, RequestHandler } from "express";
 import { and, eq, isNull } from "drizzle-orm";
-import type { Db } from "@paperclipai/db";
-import { agentApiKeys, agents, companyMemberships, instanceUserRoles } from "@paperclipai/db";
+import type { Db } from "@paperclipai_dld/db";
+import { agentApiKeys, agents, companyMemberships, instanceUserRoles } from "@paperclipai_dld/db";
 import { verifyLocalAgentJwt } from "../agent-auth-jwt.js";
-import type { DeploymentMode } from "@paperclipai/shared";
+import type { DeploymentMode } from "@paperclipai_dld/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
 import { logger } from "./logger.js";
 

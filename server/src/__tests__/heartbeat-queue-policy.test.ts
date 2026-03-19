@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { agents } from "@paperclipai/db";
+import type { agents } from "@paperclipai_dld/db";
 import {
   normalizeMaxQueuedRuns,
   parseHeartbeatPolicy,

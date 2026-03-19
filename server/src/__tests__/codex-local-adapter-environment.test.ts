@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { testEnvironment } from "@paperclipai/adapter-codex-local/server";
+import { testEnvironment } from "@paperclipai_dld/adapter-codex-local/server";
 
 const itWindows = process.platform === "win32" ? it : it.skip;
 

@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { Db } from "@paperclipai/db";
+import type { Db } from "@paperclipai_dld/db";
 import type {
   CompanyPortabilityAgentManifestEntry,
   CompanyPortabilityCollisionStrategy,
@@ -13,8 +13,8 @@ import type {
   CompanyPortabilityPreview,
   CompanyPortabilityPreviewAgentPlan,
   CompanyPortabilityPreviewResult,
-} from "@paperclipai/shared";
-import { normalizeAgentUrlKey, portabilityManifestSchema } from "@paperclipai/shared";
+} from "@paperclipai_dld/shared";
+import { normalizeAgentUrlKey, portabilityManifestSchema } from "@paperclipai_dld/shared";
 import { notFound, unprocessable } from "../errors.js";
 import { accessService } from "./access.js";
 import { agentService } from "./agents.js";

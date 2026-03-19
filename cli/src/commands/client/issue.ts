@@ -6,7 +6,7 @@ import {
   updateIssueSchema,
   type Issue,
   type IssueComment,
-} from "@paperclipai/shared";
+} from "@paperclipai_dld/shared";
 import {
   addCommonClientOptions,
   formatInlineRecord,

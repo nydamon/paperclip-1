@@ -78,13 +78,13 @@ These can be overridden at build time with `--build-arg`. The values were last u
 
 ## Docker build: plugin-sdk must be compiled before server
 
-The server imports `@paperclipai/plugin-sdk` (workspace package at `packages/plugins/sdk/`). TypeScript's NodeNext module resolution requires `dist/` to exist before `tsc` runs on the server. Both Dockerfiles now do:
+The server imports `@paperclipai_dld/plugin-sdk` (workspace package at `packages/plugins/sdk/`). TypeScript's NodeNext module resolution requires `dist/` to exist before `tsc` runs on the server. Both Dockerfiles now do:
 
 ```
-RUN pnpm --filter @paperclipai/plugin-sdk build && pnpm --filter @paperclipai/server build
+RUN pnpm --filter @paperclipai_dld/plugin-sdk build && pnpm --filter @paperclipai_dld/server build
 ```
 
-The main `Dockerfile` also has `COPY packages/plugins/sdk/package.json packages/plugins/sdk/` in the `deps` stage. Omitting either step causes `TS2307: Cannot find module '@paperclipai/plugin-sdk'` and cascading TypeScript errors throughout the plugin system files.
+The main `Dockerfile` also has `COPY packages/plugins/sdk/package.json packages/plugins/sdk/` in the `deps` stage. Omitting either step causes `TS2307: Cannot find module '@paperclipai_dld/plugin-sdk'` and cascading TypeScript errors throughout the plugin system files.
 
 ## GitHub plugin (paperclip-github)
 

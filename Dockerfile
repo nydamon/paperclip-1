@@ -29,8 +29,8 @@ WORKDIR /app
 COPY --from=deps /app /app
 COPY . .
 ENV NODE_OPTIONS=--max-old-space-size=1536
-RUN pnpm --filter @paperclipai/ui build
-RUN pnpm --filter @paperclipai/plugin-sdk build && pnpm --filter @paperclipai/server build
+RUN pnpm --filter @paperclipai_dld/ui build
+RUN pnpm --filter @paperclipai_dld/plugin-sdk build && pnpm --filter @paperclipai_dld/server build
 RUN test -f server/dist/index.js || (echo "ERROR: server build output missing" && exit 1)
 
 FROM base AS production

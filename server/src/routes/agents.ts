@@ -1,8 +1,8 @@
 import { Router, type Request } from "express";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import path from "node:path";
-import type { Db } from "@paperclipai/db";
-import { agents as agentsTable, companies, heartbeatRuns } from "@paperclipai/db";
+import type { Db } from "@paperclipai_dld/db";
+import { agents as agentsTable, companies, heartbeatRuns } from "@paperclipai_dld/db";
 import { and, desc, eq, inArray, not, sql } from "drizzle-orm";
 import {
   createAgentKeySchema,
@@ -17,7 +17,7 @@ import {
   updateAgentInstructionsPathSchema,
   wakeAgentSchema,
   updateAgentSchema,
-} from "@paperclipai/shared";
+} from "@paperclipai_dld/shared";
 import { validate } from "../middleware/validate.js";
 import {
   agentService,
@@ -36,15 +36,15 @@ import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { findServerAdapter, listAdapterModels } from "../adapters/index.js";
 import { redactEventPayload } from "../redaction.js";
 import { redactCurrentUserValue } from "../log-redaction.js";
-import { runClaudeLogin } from "@paperclipai/adapter-claude-local/server";
-import { DEFAULT_CLAUDE_LOCAL_SKIP_PERMISSIONS } from "@paperclipai/adapter-claude-local";
+import { runClaudeLogin } from "@paperclipai_dld/adapter-claude-local/server";
+import { DEFAULT_CLAUDE_LOCAL_SKIP_PERMISSIONS } from "@paperclipai_dld/adapter-claude-local";
 import {
   DEFAULT_CODEX_LOCAL_BYPASS_APPROVALS_AND_SANDBOX,
   DEFAULT_CODEX_LOCAL_MODEL,
-} from "@paperclipai/adapter-codex-local";
-import { DEFAULT_CURSOR_LOCAL_MODEL } from "@paperclipai/adapter-cursor-local";
-import { DEFAULT_GEMINI_LOCAL_MODEL } from "@paperclipai/adapter-gemini-local";
-import { ensureOpenCodeModelConfiguredAndAvailable } from "@paperclipai/adapter-opencode-local/server";
+} from "@paperclipai_dld/adapter-codex-local";
+import { DEFAULT_CURSOR_LOCAL_MODEL } from "@paperclipai_dld/adapter-cursor-local";
+import { DEFAULT_GEMINI_LOCAL_MODEL } from "@paperclipai_dld/adapter-gemini-local";
+import { ensureOpenCodeModelConfiguredAndAvailable } from "@paperclipai_dld/adapter-opencode-local/server";
 
 function asNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") return null;

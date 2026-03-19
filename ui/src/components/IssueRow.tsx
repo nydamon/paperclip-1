@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { Issue } from "@paperclipai/shared";
+import type { Issue } from "@paperclipai_dld/shared";
 import { Link } from "@/lib/router";
 import { cn } from "../lib/utils";
 import { PriorityIcon } from "./PriorityIcon";

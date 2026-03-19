@@ -40,7 +40,7 @@ import {
 } from "lucide-react";
 import { Identity } from "../components/Identity";
 import { PageTabBar } from "../components/PageTabBar";
-import type { Approval, HeartbeatRun, Issue, JoinRequest } from "@paperclipai/shared";
+import type { Approval, HeartbeatRun, Issue, JoinRequest } from "@paperclipai_dld/shared";
 import {
   ACTIONABLE_APPROVAL_STATUSES,
   getApprovalsForTab,

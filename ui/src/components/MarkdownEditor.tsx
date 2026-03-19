@@ -27,7 +27,7 @@ import {
   thematicBreakPlugin,
   type RealmPlugin,
 } from "@mdxeditor/editor";
-import { buildProjectMentionHref, parseProjectMentionHref } from "@paperclipai/shared";
+import { buildProjectMentionHref, parseProjectMentionHref } from "@paperclipai_dld/shared";
 import { cn } from "../lib/utils";
 
 /* ---- Mention types ---- */

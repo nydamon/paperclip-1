@@ -5,7 +5,7 @@
  * The original mvanhorn plugin used 2-arg form which no longer matches the SDK.
  */
 
-import type { PluginContext } from "@paperclipai/plugin-sdk";
+import type { PluginContext } from "@paperclipai_dld/plugin-sdk";
 import { TOOL_NAMES } from "./constants.js";
 import * as github from "./github.js";
 import * as sync from "./sync.js";

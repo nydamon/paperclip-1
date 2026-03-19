@@ -19,9 +19,9 @@ Paperclip no longer uses release branches or Changesets for publishing.
 
 The CLI package, `paperclipai`, imports code from workspace packages such as:
 
-- `@paperclipai/server`
-- `@paperclipai/db`
-- `@paperclipai/shared`
+- `@paperclipai_dld/server`
+- `@paperclipai_dld/db`
+- `@paperclipai_dld/shared`
 - adapter packages under `packages/adapters/`
 
 Those workspace references are valid in development but not in a publishable npm package. The release flow rewrites versions temporarily, then builds a publishable CLI bundle.

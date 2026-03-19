@@ -2,7 +2,7 @@ import {
   redactHomePathUserSegments,
   redactHomePathUserSegmentsInValue,
   type TranscriptEntry,
-} from "@paperclipai/adapter-utils";
+} from "@paperclipai_dld/adapter-utils";
 
 function safeJsonParse(text: string): unknown {
   try {

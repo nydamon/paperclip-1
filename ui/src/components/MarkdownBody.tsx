@@ -1,7 +1,7 @@
 import { isValidElement, useEffect, useId, useState, type CSSProperties, type ReactNode } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { parseProjectMentionHref } from "@paperclipai/shared";
+import { parseProjectMentionHref } from "@paperclipai_dld/shared";
 import { cn } from "../lib/utils";
 import { useTheme } from "../context/ThemeContext";
 
