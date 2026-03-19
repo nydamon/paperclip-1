@@ -105,9 +105,20 @@ function hasNonEmptyEnvValue(env: Record<string, string>, key: string): boolean 
   return typeof raw === "string" && raw.trim().length > 0;
 }
 
+/** True when Claude Code is pointed at OpenRouter (API key via OPENROUTER_API_KEY / ANTHROPIC_AUTH_TOKEN, not ANTHROPIC_API_KEY). */
+function isOpenRouterClaudeEnv(env: Record<string, string>): boolean {
+  const base = env.ANTHROPIC_BASE_URL?.trim().toLowerCase() ?? "";
+  if (!base.includes("openrouter")) return false;
+  return (
+    hasNonEmptyEnvValue(env, "OPENROUTER_API_KEY") ||
+    hasNonEmptyEnvValue(env, "ANTHROPIC_AUTH_TOKEN")
+  );
+}
+
 function resolveClaudeBillingType(env: Record<string, string>): "api" | "subscription" {
-  // Claude uses API-key auth when ANTHROPIC_API_KEY is present; otherwise rely on local login/session auth.
-  return hasNonEmptyEnvValue(env, "ANTHROPIC_API_KEY") ? "api" : "subscription";
+  if (hasNonEmptyEnvValue(env, "ANTHROPIC_API_KEY")) return "api";
+  if (isOpenRouterClaudeEnv(env)) return "api";
+  return "subscription";
 }
 
 async function buildClaudeRuntimeConfig(input: ClaudeExecutionInput): Promise<ClaudeRuntimeConfig> {

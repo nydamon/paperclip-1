@@ -110,6 +110,14 @@ The main `Dockerfile` also has `COPY packages/plugins/sdk/package.json packages/
   ```bash
   gh workflow run deploy-vultr.yml --repo Viraforge/paperclip --ref master
   ```
+- **Drift check fires whenever master is ahead of VPS**: `deploy-drift-check.yml` runs on a schedule and will fail any time master has commits that haven't been deployed. This is expected and intentional — it means you need to run `deploy-vultr.yml`. It is NOT a bug and should NOT be disabled.
+- **Lockfile changes must go through `refresh-lockfile.yml`**: Never commit `pnpm-lock.yaml` manually in a PR — `pr-policy` will block it. The correct path when the lockfile is stale:
+  1. Trigger the workflow: `gh workflow run refresh-lockfile.yml --repo Viraforge/paperclip --ref master`
+  2. The workflow pushes the updated lockfile to branch `chore/refresh-lockfile` but **cannot create the PR** (GitHub Actions lacks PR creation permission in this repo).
+  3. Open the PR manually: `gh pr create --repo Viraforge/paperclip --head chore/refresh-lockfile --base master --title "chore(lockfile): refresh pnpm-lock.yaml" --body "Auto-generated lockfile refresh."`
+  4. Post `ai-review/verdict`, then merge. The `pr-policy` check has a built-in exception for the `chore/refresh-lockfile` branch.
+- **npm package scope is `@paperclipai_dld`**: All 15 packages are published under `@paperclipai_dld/` (not `@paperclipai/`). The npm org name is `paperclipai_dld`. Do not rename packages back to `@paperclipai/` — that scope is owned by a third party on npm.
+- **npm publish requires Automation token**: The `NPM_TOKEN` stored in GitHub Environments `npm-canary` and `npm-stable` must be an **Automation** token (not a Publish token) to bypass 2FA in CI. If publish fails with `403 Two-factor authentication required`, the token type is wrong.
 
 ## Runtime auth state
 

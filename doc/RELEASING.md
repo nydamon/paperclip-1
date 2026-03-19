@@ -11,6 +11,8 @@ The release model separates **merge CI**, **app deploy**, and **npm publish**:
 
 Merging to `master` does **not** publish npm packages. Deploy the app with **Deploy Vultr** when ready ([`deploy-vultr.yml`](../.github/workflows/deploy-vultr.yml)).
 
+For the full PR / branch-protection / `npx` policy in one place, see [`docs/deploy/github-workflow-policy.md`](../docs/deploy/github-workflow-policy.md).
+
 ## Versioning Model
 
 Paperclip uses calendar versions that still fit semver syntax:

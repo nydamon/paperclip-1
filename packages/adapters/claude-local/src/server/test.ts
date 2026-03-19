@@ -95,9 +95,24 @@ export async function testEnvironment(
     });
   }
 
+  const mergedForMode: Record<string, string> = { ...process.env, ...env } as Record<string, string>;
+  const baseUrl = (mergedForMode.ANTHROPIC_BASE_URL ?? "").trim().toLowerCase();
+  const looksLikeOpenRouter =
+    baseUrl.includes("openrouter") &&
+    (isNonEmpty(mergedForMode.OPENROUTER_API_KEY) || isNonEmpty(mergedForMode.ANTHROPIC_AUTH_TOKEN));
+
   const configApiKey = env.ANTHROPIC_API_KEY;
   const hostApiKey = process.env.ANTHROPIC_API_KEY;
-  if (isNonEmpty(configApiKey) || isNonEmpty(hostApiKey)) {
+  if (looksLikeOpenRouter) {
+    checks.push({
+      code: "claude_openrouter_mode",
+      level: "info",
+      message:
+        "OpenRouter routing detected (ANTHROPIC_BASE_URL + OPENROUTER_API_KEY or ANTHROPIC_AUTH_TOKEN).",
+      detail: `ANTHROPIC_BASE_URL=${mergedForMode.ANTHROPIC_BASE_URL ?? "(unset)"}`,
+      hint: "Keep ANTHROPIC_API_KEY empty when using OpenRouter. Set model via adapter `model` (e.g. openrouter/hunter-alpha).",
+    });
+  } else if (isNonEmpty(configApiKey) || isNonEmpty(hostApiKey)) {
     const source = isNonEmpty(configApiKey) ? "adapter config env" : "server environment";
     checks.push({
       code: "claude_anthropic_api_key_overrides_subscription",
