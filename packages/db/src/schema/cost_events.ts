@@ -49,5 +49,6 @@ export const costEvents = pgTable(
       table.companyId,
       table.heartbeatRunId,
     ),
+    agentOccurredIdx: index("cost_events_agent_occurred_idx").on(table.agentId, table.occurredAt),
   }),
 );
