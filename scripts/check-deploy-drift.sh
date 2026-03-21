@@ -31,6 +31,7 @@ done
 [ -n "$VPS_USER" ] || { echo "--user is required" >&2; exit 1; }
 [ -n "$EXPECTED_SHA" ] || { echo "--expected-sha is required" >&2; exit 1; }
 
+
 ssh \
   -i "$HOME/.ssh/id_ed25519" \
   -o BatchMode=yes \
