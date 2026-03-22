@@ -106,6 +106,8 @@ MINIMAX_API_KEY=<your_minimax_api_key>
 3. **Firewall:** Allow **TCP 80** (and **443** only if you add TLS on the box) from the internet on the VPS / cloud firewall.
 4. **`PAPERCLIP_PUBLIC_URL`:** Set to **`https://<your-hostname>`** (same host users load in the browser) so auth callbacks and links are correct.
 
+5. **`PAPERCLIP_ALLOWED_HOSTNAMES` (recommended when using a hostname):** Include the **VPS public IP** as well, e.g. `64.176.199.162`, comma-separated. Otherwise the private hostname gate may block **`Host: <ip>`** requests (including GitHub Actions deploy checks that curl `http://$VULTR_HOST/...`).
+
 Direct **`http://<ip>:3100`** remains available for debugging while **`edge`** serves **`http://<hostname>/`** through Cloudflare.
 
 ## Deployment Flow
