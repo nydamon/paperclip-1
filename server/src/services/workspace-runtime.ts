@@ -963,7 +963,7 @@ function toPersistedWorkspaceRuntimeService(record: RuntimeServiceRecord): typeo
     stoppedAt: record.stoppedAt ? new Date(record.stoppedAt) : null,
     stopPolicy: record.stopPolicy,
     healthStatus: record.healthStatus,
-    updatedAt: new Date(),
+    updatedAt: new Date().toISOString() as any,
   };
 }
 
@@ -1508,7 +1508,7 @@ export async function persistAdapterManagedRuntimeServices(input: {
         stopPolicy: ref.stopPolicy,
         healthStatus: ref.healthStatus,
         createdAt,
-        updatedAt: new Date(),
+        updatedAt: new Date().toISOString() as any,
       })
       .onConflictDoUpdate({
         target: workspaceRuntimeServices.id,
@@ -1536,7 +1536,7 @@ export async function persistAdapterManagedRuntimeServices(input: {
           stoppedAt: ref.stoppedAt ? new Date(ref.stoppedAt) : null,
           stopPolicy: ref.stopPolicy,
           healthStatus: ref.healthStatus,
-          updatedAt: new Date(),
+          updatedAt: new Date().toISOString() as any,
         },
       });
   }

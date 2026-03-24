@@ -341,7 +341,7 @@ export function agentService(db: Db) {
 
     const updated = await db
       .update(agents)
-      .set({ ...normalizedPatch, updatedAt: new Date() })
+      .set({ ...normalizedPatch, updatedAt: new Date().toISOString() as any })
       .where(eq(agents.id, id))
       .returning()
       .then((rows) => rows[0] ?? null);
@@ -416,7 +416,7 @@ export function agentService(db: Db) {
           status: "paused",
           pauseReason: reason,
           pausedAt: new Date(),
-          updatedAt: new Date(),
+          updatedAt: new Date().toISOString() as any,
         })
         .where(eq(agents.id, id))
         .returning()
@@ -438,7 +438,7 @@ export function agentService(db: Db) {
           status: "idle",
           pauseReason: null,
           pausedAt: null,
-          updatedAt: new Date(),
+          updatedAt: new Date().toISOString() as any,
         })
         .where(eq(agents.id, id))
         .returning()
@@ -456,7 +456,7 @@ export function agentService(db: Db) {
           status: "terminated",
           pauseReason: null,
           pausedAt: null,
-          updatedAt: new Date(),
+          updatedAt: new Date().toISOString() as any,
         })
         .where(eq(agents.id, id));
 
@@ -496,7 +496,7 @@ export function agentService(db: Db) {
 
       const updated = await db
         .update(agents)
-        .set({ status: "idle", updatedAt: new Date() })
+        .set({ status: "idle", updatedAt: new Date().toISOString() as any })
         .where(eq(agents.id, id))
         .returning()
         .then((rows) => rows[0] ?? null);
@@ -512,7 +512,7 @@ export function agentService(db: Db) {
         .update(agents)
         .set({
           permissions: normalizeAgentPermissions(permissions, existing.role),
-          updatedAt: new Date(),
+          updatedAt: new Date().toISOString() as any,
         })
         .where(eq(agents.id, id))
         .returning()
