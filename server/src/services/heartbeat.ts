@@ -1591,11 +1591,12 @@ export function heartbeatService(db: Db) {
    */
   async function enqueueProcessLostRetries() {
     const now = new Date();
+    const nowStr = now.toISOString();
 
     const dueIssues = await db
       .select()
       .from(issues)
-      .where(sql`${issues.processLostRetryAt} IS NOT NULL AND ${issues.processLostRetryAt} <= ${now}`)
+      .where(sql`${issues.processLostRetryAt} IS NOT NULL AND ${issues.processLostRetryAt} <= ${nowStr}`)
       .limit(100);
 
     const enqueued: string[] = [];
