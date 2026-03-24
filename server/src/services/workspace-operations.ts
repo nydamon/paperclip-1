@@ -99,7 +99,7 @@ export function workspaceOperationService(db: Db) {
             .update(workspaceOperations)
             .set({
               executionWorkspaceId,
-              updatedAt: new Date().toISOString() as any,
+              updatedAt: new Date(),
             })
             .where(inArray(workspaceOperations.id, createdIds));
         },
