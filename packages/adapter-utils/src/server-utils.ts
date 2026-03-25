@@ -201,6 +201,16 @@ export function redactEnvForLogs(env: Record<string, string>): Record<string, st
   return redacted;
 }
 
+export function applyLocalAgentFilesystemEnv(
+  env: Record<string, string>,
+  _opts: { agentId: string },
+): void {
+  const home = process.env.PAPERCLIP_HOME;
+  if (typeof home === "string" && home.length > 0) env.PAPERCLIP_HOME = home;
+  const instanceId = process.env.PAPERCLIP_INSTANCE_ID;
+  if (typeof instanceId === "string" && instanceId.length > 0) env.PAPERCLIP_INSTANCE_ID = instanceId;
+}
+
 export function buildPaperclipEnv(agent: { id: string; companyId: string }): Record<string, string> {
   const resolveHostForUrl = (rawHost: string): string => {
     const host = rawHost.trim();
