@@ -446,7 +446,13 @@ async function handlePullRequestEvent(payload: GitHubPullRequestEvent): Promise<
 
   await ctx.issues.update(
     link.paperclipIssueId,
-    { status: newStatus, comment },
+    { status: newStatus },
+    link.paperclipCompanyId,
+  );
+
+  await ctx.issues.createComment(
+    link.paperclipIssueId,
+    comment,
     link.paperclipCompanyId,
   );
 
