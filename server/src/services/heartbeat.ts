@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
-import { and, asc, desc, eq, gt, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import type { BillingType } from "@paperclipai/shared";
 import {
@@ -3857,6 +3857,73 @@ export function heartbeatService(db: Db) {
         .orderBy(desc(heartbeatRuns.startedAt))
         .limit(1);
       return run ?? null;
+    },
+
+    async expireTerminatedRunLocks() {
+      // Find issues with an active execution lock whose run has already reached a terminal state.
+      const lockedIssues = await db
+        .select({
+          issueId: issues.id,
+          companyId: issues.companyId,
+          executionRunId: issues.executionRunId,
+        })
+        .from(issues)
+        .where(and(isNotNull(issues.executionLockedAt), isNotNull(issues.executionRunId)));
+
+      const expired: string[] = [];
+      for (const row of lockedIssues) {
+        if (!row.executionRunId) continue;
+        const [run] = await db
+          .select({ status: heartbeatRuns.status })
+          .from(heartbeatRuns)
+          .where(eq(heartbeatRuns.id, row.executionRunId))
+          .limit(1);
+        const terminalStatuses = ["done", "failed", "cancelled"];
+        if (!run || !terminalStatuses.includes(run.status)) continue;
+
+        await db
+          .update(issues)
+          .set({ executionLockedAt: null, executionRunId: null, executionAgentNameKey: null, updatedAt: new Date() })
+          .where(and(eq(issues.id, row.issueId), isNull(issues.checkoutRunId)));
+
+        logger.warn({ issueId: row.issueId, executionRunId: row.executionRunId }, "expired stale execution lock for terminated run");
+        expired.push(row.issueId);
+      }
+      return { expired: expired.length };
+    },
+
+    async enqueueProcessLostRetries() {
+      // Find issues whose process_lost_retry_at has elapsed and enqueue a wakeup.
+      const now = new Date();
+      const due = await db
+        .select({ id: issues.id, assigneeAgentId: issues.assigneeAgentId })
+        .from(issues)
+        .where(and(isNotNull(issues.processLostRetryAt), lte(issues.processLostRetryAt, now)));
+
+      const enqueued: string[] = [];
+      for (const issue of due) {
+        if (!issue.assigneeAgentId) continue;
+        await db.update(issues).set({ processLostRetryAt: null, updatedAt: now }).where(eq(issues.id, issue.id));
+        await enqueueWakeup(issue.assigneeAgentId, {
+          source: "on_demand",
+          triggerDetail: "process_lost_retry",
+          reason: "process_lost_retry",
+          requestedByActorType: "system",
+          requestedByActorId: "heartbeat_scheduler",
+          contextSnapshot: { issueId: issue.id, source: "process_lost_retry" },
+        });
+        enqueued.push(issue.id);
+      }
+      if (enqueued.length > 0) {
+        logger.info({ count: enqueued.length }, "enqueued process_lost retries");
+      }
+      return { enqueued: enqueued.length };
+    },
+
+    async reapOrphanedWorkspaceProcesses() {
+      // No-op stub: orphaned workspace process reaping is not yet implemented.
+      // Workspace runtime services are cleaned up via releaseRuntimeServicesForRun.
+      return { reaped: 0 };
     },
   };
 }
