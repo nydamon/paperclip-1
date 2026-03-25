@@ -183,6 +183,8 @@ export interface ToolRunContext {
   companyId: string;
   /** UUID of the project the run belongs to. */
   projectId: string;
+  /** UUID of the Paperclip issue the agent is currently working on, if any. */
+  issueId?: string;
 }
 
 /**

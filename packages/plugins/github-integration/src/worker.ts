@@ -232,43 +232,31 @@ async function commentOnLinkedIssues(
 ): Promise<boolean> {
   if (!ctx) return false;
 
-  const issues = await ctx.issues.list({
-    companyId,
-    status: "in_progress",
-    limit: 50,
-  });
+  const [owner, repoName] = repo.split("/");
+  if (!owner || !repoName) return false;
 
   let commented = false;
 
-  for (const issue of issues) {
-    const haystack = `${issue.title} ${issue.description ?? ""}`.toLowerCase();
-    const repoLower = repo.toLowerCase();
+  for (const prNumber of prNumbers) {
+    const link = await sync.getLinkByGitHub(ctx, owner, repoName, prNumber);
+    if (!link) continue;
 
-    const matchesPR = prNumbers.some(
-      (n) =>
-        haystack.includes(`#${n}`) ||
-        haystack.includes(`pr ${n}`) ||
-        haystack.includes(`pull/${n}`),
-    );
-    const matchesRepo = haystack.includes(repoLower);
+    const commentBody = buildFailureComment(repo, failureContext);
+    await ctx.issues.createComment(link.paperclipIssueId, commentBody, companyId);
+    commented = true;
 
-    if (matchesPR || matchesRepo) {
-      const commentBody = buildFailureComment(repo, failureContext);
-      await ctx.issues.createComment(issue.id, commentBody, companyId);
-      commented = true;
+    ctx.logger.info(`Commented on issue ${link.paperclipIssueId} about CI failure (PR #${prNumber})`);
 
-      ctx.logger.info(`Commented on issue ${issue.identifier ?? issue.id} about CI failure`);
-
-      if (issue.assigneeAgentId) {
-        try {
-          const name = "name" in failureContext ? failureContext.name : "CI check";
-          await ctx.agents.invoke(issue.assigneeAgentId, companyId, {
-            prompt: `CI/PR gate failure on ${repo}: "${name}" failed. See issue ${issue.identifier ?? issue.id} for details.`,
-            reason: "github-ci-failure-on-linked-issue",
-          });
-        } catch {
-          ctx.logger.warn(`Could not invoke agent ${issue.assigneeAgentId}`);
-        }
+    const issue = await ctx.issues.get(link.paperclipIssueId, companyId);
+    if (issue?.assigneeAgentId) {
+      try {
+        const name = "name" in failureContext ? failureContext.name : "CI check";
+        await ctx.agents.invoke(issue.assigneeAgentId, companyId, {
+          prompt: `CI/PR gate failure on ${repo}: "${name}" failed. See issue ${issue.identifier ?? link.paperclipIssueId} for details.`,
+          reason: "github-ci-failure-on-linked-issue",
+        });
+      } catch {
+        ctx.logger.warn(`Could not invoke agent ${issue.assigneeAgentId}`);
       }
     }
   }
