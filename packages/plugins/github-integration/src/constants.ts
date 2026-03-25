@@ -24,16 +24,16 @@ export const JOB_KEYS = {
 } as const;
 
 export const DEFAULT_CONFIG = {
-  webhookSecret: "",
-  companyId: "",
-  goalId: "",
-  defaultAssigneeAgentId: "",
-  defaultRepo: "",
-  githubTokenRef: "",
+  webhookSecret: undefined,
+  companyId: undefined,
+  goalId: undefined,
+  defaultAssigneeAgentId: undefined,
+  defaultRepo: undefined,
+  githubTokenRef: undefined,
   syncDirection: "bidirectional" as const,
   syncComments: false,
   skipSignatureVerification: false,
-} as const;
+};
 
 export type PluginConfig = {
   webhookSecret?: string;

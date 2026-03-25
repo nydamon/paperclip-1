@@ -404,6 +404,23 @@ async function handleIssueEvent(payload: GitHubIssueEvent): Promise<void> {
 const plugin = definePlugin({
   async setup(pluginCtx) {
     ctx = pluginCtx;
+
+    // Validate required config at startup so misconfiguration fails fast
+    // rather than silently at event-processing time.
+    const raw = (await ctx.config.get()) as PluginConfig;
+    if (!raw.companyId) {
+      throw new Error("GitHub plugin config error: companyId is required");
+    }
+    if (!raw.skipSignatureVerification && !raw.webhookSecret) {
+      throw new Error(
+        "GitHub plugin config error: webhookSecret is required " +
+          "(or set skipSignatureVerification: true for development)",
+      );
+    }
+    if (!raw.githubTokenRef) {
+      ctx.logger.warn("githubTokenRef not configured — GitHub API tools will not function");
+    }
+
     registerTools(ctx);
     ctx.logger.info("GitHub plugin initialized");
   },
