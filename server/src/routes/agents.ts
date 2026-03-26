@@ -2132,6 +2132,34 @@ export function agentRoutes(db: Db) {
     res.json(redactCurrentUserValue(run, await getCurrentUserRedactionOptions()));
   });
 
+  // B2 — Ping endpoint: agent signals it is still alive, updating last_heartbeat_at.
+  // Auth: agent JWT only; the calling agent must own the run (no CEO bypass).
+  router.post("/agents/:agentId/runs/:runId/ping", async (req, res) => {
+    if (req.actor.type !== "agent" || !req.actor.agentId) {
+      res.status(403).json({ error: "Forbidden: only agents may ping runs" });
+      return;
+    }
+    const { agentId, runId } = req.params as { agentId: string; runId: string };
+    if (req.actor.agentId !== agentId) {
+      res.status(403).json({ error: "Forbidden: agent may only ping its own runs" });
+      return;
+    }
+    const result = await heartbeat.pingRun(runId, agentId);
+    if (!result) {
+      // Either the run doesn't exist, isn't running, or isn't owned by this agent
+      const run = await heartbeat.getRun(runId);
+      if (!run) {
+        res.status(404).json({ error: "Heartbeat run not found" });
+      } else if (run.agentId !== agentId) {
+        res.status(403).json({ error: "Forbidden: agent does not own this run" });
+      } else {
+        res.status(409).json({ error: "Run is not in running state", status: run.status });
+      }
+      return;
+    }
+    res.json(result);
+  });
+
   router.post("/heartbeat-runs/:runId/cancel", async (req, res) => {
     await assertBoardOrCeoAgent(req, db);
     const runId = req.params.runId as string;

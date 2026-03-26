@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
-import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, lte, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import type { BillingType } from "@paperclipai/shared";
 import {
@@ -51,6 +51,7 @@ import {
   resolveExecutionWorkspaceMode,
 } from "./execution-workspace-policy.js";
 import { instanceSettingsService } from "./instance-settings.js";
+import { logActivity } from "./activity-log.js";
 import { redactCurrentUserText, redactCurrentUserValue } from "../log-redaction.js";
 import {
   hasSessionCompactionThresholds,
@@ -3942,6 +3943,98 @@ export function heartbeatService(db: Db) {
       // No-op stub: orphaned workspace process reaping is not yet implemented.
       // Workspace runtime services are cleaned up via releaseRuntimeServicesForRun.
       return { reaped: 0 };
+    },
+
+    /**
+     * B2 — Ping endpoint: update last_heartbeat_at for a running run to signal liveness.
+     * Only the agent that owns the run may call this.
+     * Returns the updated lastHeartbeatAt value, or null if the run was not found or not running.
+     */
+    async pingRun(runId: string, callerAgentId: string): Promise<{ lastHeartbeatAt: string } | null> {
+      const run = await getRun(runId);
+      if (!run) return null;
+      if (run.agentId !== callerAgentId) return null;
+      if (run.status !== "running") return null;
+
+      const now = new Date();
+      const updated = await db
+        .update(heartbeatRuns)
+        .set({ lastHeartbeatAt: now, updatedAt: now })
+        .where(and(eq(heartbeatRuns.id, runId), eq(heartbeatRuns.status, "running")))
+        .returning({ lastHeartbeatAt: heartbeatRuns.lastHeartbeatAt })
+        .then((rows) => rows[0] ?? null);
+
+      if (!updated?.lastHeartbeatAt) return null;
+      return { lastHeartbeatAt: new Date(updated.lastHeartbeatAt).toISOString() };
+    },
+
+    /**
+     * B4 — Watchdog: mark stale running runs as timed_out and release their locked tasks.
+     * Called on a platform-level interval (every 5 min recommended).
+     * Timeout threshold: PAPERCLIP_RUN_TIMEOUT_MINUTES env var, default 30.
+     */
+    async timeoutStaleRuns(): Promise<{ timedOut: number }> {
+      const timeoutMinutes = Math.max(1, Number(process.env.PAPERCLIP_RUN_TIMEOUT_MINUTES ?? 30) || 30);
+      const cutoff = new Date(Date.now() - timeoutMinutes * 60 * 1000);
+
+      const staleRuns = await db
+        .select({ run: heartbeatRuns })
+        .from(heartbeatRuns)
+        .where(
+          and(
+            eq(heartbeatRuns.status, "running"),
+            lt(heartbeatRuns.lastHeartbeatAt, cutoff),
+          ),
+        );
+
+      if (staleRuns.length === 0) return { timedOut: 0 };
+
+      const timedOut: string[] = [];
+
+      for (const { run } of staleRuns) {
+        // Skip runs that are still actively executing in this process
+        if (runningProcesses.has(run.id) || activeRunExecutions.has(run.id)) continue;
+
+        logger.warn(
+          { runId: run.id, agentId: run.agentId, lastHeartbeatAt: run.lastHeartbeatAt, cutoff },
+          "watchdog: timing out stale run",
+        );
+
+        const timedOutRun = await setRunStatus(run.id, "timed_out", {
+          finishedAt: new Date(),
+          error: `Run timed out after ${timeoutMinutes} minutes without a heartbeat ping`,
+          errorCode: "watchdog_timeout",
+        });
+
+        if (timedOutRun) {
+          await appendRunEvent(timedOutRun, await nextRunEventSeq(timedOutRun.id), {
+            eventType: "lifecycle",
+            stream: "system",
+            level: "warn",
+            message: `run timed out by watchdog (no ping for ${timeoutMinutes}+ minutes)`,
+          });
+          await releaseIssueExecutionAndPromote(timedOutRun);
+          await finalizeAgentStatus(timedOutRun.agentId, "timed_out");
+
+          await logActivity(db, {
+            companyId: timedOutRun.companyId,
+            actorType: "system",
+            actorId: "watchdog",
+            action: "heartbeat.timed_out",
+            entityType: "heartbeat_run",
+            entityId: timedOutRun.id,
+            details: { agentId: timedOutRun.agentId, timeoutMinutes },
+          });
+
+          timedOut.push(timedOutRun.id);
+        }
+      }
+
+      if (timedOut.length > 0) {
+        logger.warn({ count: timedOut.length, runIds: timedOut }, "watchdog: timed out stale runs");
+      }
+
+      return { timedOut: timedOut.length };
     },
   };
 }
