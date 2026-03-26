@@ -86,6 +86,57 @@ RUN pnpm --filter @paperclipai/plugin-sdk build && pnpm --filter @paperclipai/se
 
 The main `Dockerfile` also has `COPY packages/plugins/sdk/package.json packages/plugins/sdk/` in the `deps` stage. Omitting either step causes `TS2307: Cannot find module '@paperclipai/plugin-sdk'` and cascading TypeScript errors throughout the plugin system files.
 
+## Plugin survival across deploys
+
+- **Built-in plugins** (e.g. `paperclip-github` at `/app/packages/plugins/github-integration/`) are baked into the Docker image and survive container recreation.
+- **Volume-installed plugins** (e.g. `paperclip-plugin-superpowers` at `/paperclip/.paperclip/plugins/`) are on the `paperclip-data` volume. They survive container recreation but their `dist/worker.js` may get wiped if the volume is recreated.
+- **CLI tool extensions** (e.g. `pi-autoresearch` at `/paperclip/.pi/agent/extensions/`) are on the `paperclip-data` volume. They survive container recreation but not volume wipes. These are NOT in the Docker image — reinstall from source if lost.
+- If a volume-installed plugin enters `error` state after a deploy, fix: `docker exec paperclip-server-1 npm install <package>@<version> --prefix /paperclip/.paperclip/plugins/<name>`, then `UPDATE plugins SET status = 'ready' WHERE id = '<id>'`, then restart the server.
+
+## Superpowers plugin skills export
+
+The superpowers plugin (obra/superpowers) stores 14 skills in `plugin_state` but adapters need them on the filesystem. After install or volume wipe, export skills:
+
+```bash
+# 1. Extract skills as JSON from DB
+docker exec paperclip-db-1 psql -U paperclip paperclip -t -A -c "
+  SELECT jsonb_agg(jsonb_build_object(
+    'id', value_json->>'id', 'name', value_json->>'name',
+    'description', value_json->>'description', 'category', value_json->>'category',
+    'content', value_json->>'content'
+  )) FROM plugin_state
+  WHERE plugin_id = 'b42c55cb-a415-4247-9b27-91f28133f367'
+  AND scope_kind = 'instance' AND state_key LIKE 'skill:%';
+" > /tmp/superpowers-skills.json
+
+# 2. Write skill files (run inside container as node user)
+# Copy /tmp/superpowers-skills.json into container, then run a Node.js script
+# that reads the JSON and writes SKILL.md files to:
+#   /paperclip/.agents/skills/<id>/SKILL.md
+#   /paperclip/.claude/skills/<id>/SKILL.md
+#   /paperclip/.codex/skills/<id>/SKILL.md
+```
+
+## pi-autoresearch extension (Research Agent)
+
+- **Agent**: Research Agent (`4e6ee9ed-5c9d-4e41-851c-00160d19c81d`), adapter `pi_local`, model `zai/glm-5`
+- **Extension source**: https://github.com/davebcn87/pi-autoresearch
+- **Extension path**: `/paperclip/.pi/agent/extensions/pi-autoresearch/index.ts`
+- **Skill path**: `/paperclip/.pi/agent/skills/autoresearch-create/SKILL.md`
+- **Framework doc**: `/paperclip/.pi/agent/pi_autoresearch_team_experiment_framework.md`
+- **pi CLI**: baked into `Dockerfile.vps` via `PI_CODING_AGENT_VERSION` ARG (currently `0.61.1`)
+- **Persistence**: volume-based (`/paperclip/.pi/`). Survives container recreation, NOT volume wipes.
+- **Reinstall if lost**:
+  ```bash
+  docker exec paperclip-server-1 bash -c '
+    cd /tmp && git clone --depth 1 https://github.com/davebcn87/pi-autoresearch.git &&
+    mkdir -p /paperclip/.pi/agent/extensions /paperclip/.pi/agent/skills &&
+    cp -r pi-autoresearch/extensions/pi-autoresearch /paperclip/.pi/agent/extensions/ &&
+    cp -r pi-autoresearch/skills/autoresearch-create /paperclip/.pi/agent/skills/ &&
+    rm -rf /tmp/pi-autoresearch
+  '
+  ```
+
 ## GitHub plugin (paperclip-github)
 
 - Plugin ID: `0ec9cc46-eca5-48b0-aee9-61c4bdfceb9f`
@@ -450,18 +501,33 @@ rm -f /tmp/gen-secrets.mjs
 
 ### Current secrets inventory
 
+**Working (encrypted with current master key):**
+
 | Secret name | What it's for | Agent(s) with access |
 |---|---|---|
-| `vultr-api-key` | Vultr cloud API | Senior Platform Engineer |
-| `github-token` | GitHub PAT (broad) | Senior Platform Engineer |
+| `github-token` | GitHub PAT for `nydamon` (v6) | Senior Platform Engineer |
+| `rtaa-vps-ssh-key` | SSH private key for RTAA VPS (v2) | Senior Platform Engineer |
+| `cloudflare-api-key` | Cloudflare API Token (v3) | Senior Platform Engineer |
+| `vultr-api-key` | Vultr cloud API (v2) | Senior Platform Engineer |
+| `porkbun-api-key` | Porkbun domain API key `pk1_...` (v2) | Senior Platform Engineer |
+| `porkbun-secret-api-key` | Porkbun secret key `sk1_...` (v2) | Senior Platform Engineer |
+| `rtaa-clerk-secret-key` | RTAA Clerk secret key (v2) | Senior Platform Engineer |
+| `rtaa-clerk-publishable-key` | RTAA Clerk publishable key (v2) | Senior Platform Engineer |
+| `viracue-stripe-test-publishable-key` | Stripe test publishable key for Viracue | CEO, CTO |
+| `viracue-stripe-test-secret-key` | Stripe test secret key for Viracue | CEO, CTO |
+| `viracue-stripe-live-publishable-key` | Stripe live publishable key for Viracue | CEO, CTO |
+| `viracue-stripe-live-secret-key` | Stripe live secret key for Viracue | CEO, CTO |
+
+**Undecryptable (encrypted with lost master key — need plaintext to re-encrypt):**
+
+| Secret name | What it's for | Previously used by |
+|---|---|---|
 | `github-token-fine-grained` | GitHub fine-grained token | Senior Platform Engineer |
-| `porkbun-api-key` | Porkbun domain API key (`pk1_...`) | Senior Platform Engineer |
-| `porkbun-secret-api-key` | Porkbun secret key (`sk1_...`) | Senior Platform Engineer |
-| `cloudflare-api-key` | Cloudflare API Token (Bearer) | Senior Platform Engineer |
-| `github-token-viraforge` | GitHub PAT for `viraforge-ai` (ViraForge company account, `nydamon+paperclip@gmail.com`) | Senior Platform Engineer |
+| `github-token-viraforge` | GitHub PAT for `viraforge-ai` | Senior Platform Engineer |
 | `gws-service-account-key` | Google Workspace service account JSON key with domain-wide delegation (42 scopes, project `gam-project-2oeyh`) | Senior Platform Engineer |
 | `gws-oauth2-refresh-token` | Google Workspace OAuth2 refresh token for `damon@prsecurelogistics.com` (backup / user-level access) | Senior Platform Engineer |
 | `gws-client-secret` | Google Workspace GAM OAuth2 client secret (project `gam-project-2oeyh`) | Senior Platform Engineer |
+| `connie-wallet-private-key` | Connie wallet EVM private key (board approval needed) | Treasury Operator |
 
 `GWS_CLIENT_ID`, `GWS_ADMIN_EMAIL`, and `GWS_DOMAIN` are stored as plain env values in the Senior Platform Engineer's adapter config (not sensitive).
 
