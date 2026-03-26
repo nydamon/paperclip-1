@@ -567,6 +567,18 @@ export async function startServer(): Promise<StartedServer> {
         .catch((err) => {
           logger.error({ err }, "periodic heartbeat recovery failed");
         });
+
+      // B4 — Watchdog: time out runs that have not pinged within the configured window.
+      void heartbeat
+        .timeoutStaleRuns()
+        .then((result) => {
+          if (result.timedOut > 0) {
+            logger.warn({ ...result }, "watchdog: timed out stale runs");
+          }
+        })
+        .catch((err) => {
+          logger.error({ err }, "watchdog: timeoutStaleRuns failed");
+        });
     }, config.heartbeatSchedulerIntervalMs);
   }
   
