@@ -243,10 +243,16 @@ async function executeProcess(input: {
     let stdout = "";
     let stderr = "";
     child.stdout?.on("data", (chunk) => {
-      stdout += String(chunk);
+      const text = String(chunk);
+      stdout = stdout.length + text.length > 4 * 1024 * 1024
+        ? (stdout + text).slice(-(4 * 1024 * 1024))
+        : stdout + text;
     });
     child.stderr?.on("data", (chunk) => {
-      stderr += String(chunk);
+      const text = String(chunk);
+      stderr = stderr.length + text.length > 4 * 1024 * 1024
+        ? (stderr + text).slice(-(4 * 1024 * 1024))
+        : stderr + text;
     });
     child.on("error", reject);
     child.on("close", (code) => resolve({ stdout, stderr, code }));
@@ -1250,7 +1256,7 @@ function registerRuntimeService(db: Db | undefined, record: RuntimeServiceRecord
     runtimeServicesByReuseKey.set(record.reuseKey, record.id);
   }
 
-  record.child?.on("exit", (code, signal) => {
+  record.child?.once("exit", (code, signal) => {
     const current = runtimeServicesById.get(record.id);
     if (!current) return;
     clearIdleTimer(current);

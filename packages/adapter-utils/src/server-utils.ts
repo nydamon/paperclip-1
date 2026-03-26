@@ -795,7 +795,36 @@ export async function runChildProcess(
         let timedOut = false;
         let stdout = "";
         let stderr = "";
-        let logChain: Promise<void> = Promise.resolve();
+
+        // Use a queue-draining pattern instead of an ever-growing promise
+        // chain.  The old `logChain = logChain.then(…)` kept a reference to
+        // every previous chunk in a linked-list of closures, preventing GC
+        // and causing OOM when agents produce large output (257 MB+).
+        const logQueue: Array<{ stream: "stdout" | "stderr"; text: string }> = [];
+        let logDraining = false;
+        let logDone: (() => void) | null = null;
+        const logFinished = new Promise<void>((r) => { logDone = r; });
+        let childClosed = false;
+
+        async function drainLogQueue() {
+          if (logDraining) return;
+          logDraining = true;
+          while (logQueue.length > 0) {
+            const entry = logQueue.shift()!;
+            try {
+              await opts.onLog(entry.stream, entry.text);
+            } catch (err) {
+              onLogError(err, runId, `failed to append ${entry.stream} log chunk`);
+            }
+          }
+          logDraining = false;
+          if (childClosed && logQueue.length === 0) logDone?.();
+        }
+
+        function enqueueLog(stream: "stdout" | "stderr", text: string) {
+          logQueue.push({ stream, text });
+          void drainLogQueue();
+        }
 
         const timeout =
           opts.timeoutSec > 0
@@ -813,17 +842,13 @@ export async function runChildProcess(
         child.stdout?.on("data", (chunk: unknown) => {
           const text = String(chunk);
           stdout = appendWithCap(stdout, text);
-          logChain = logChain
-            .then(() => opts.onLog("stdout", text))
-            .catch((err) => onLogError(err, runId, "failed to append stdout log chunk"));
+          enqueueLog("stdout", text);
         });
 
         child.stderr?.on("data", (chunk: unknown) => {
           const text = String(chunk);
           stderr = appendWithCap(stderr, text);
-          logChain = logChain
-            .then(() => opts.onLog("stderr", text))
-            .catch((err) => onLogError(err, runId, "failed to append stderr log chunk"));
+          enqueueLog("stderr", text);
         });
 
         child.on("error", (err: Error) => {
@@ -841,7 +866,10 @@ export async function runChildProcess(
         child.on("close", (code: number | null, signal: NodeJS.Signals | null) => {
           if (timeout) clearTimeout(timeout);
           runningProcesses.delete(runId);
-          void logChain.finally(() => {
+          childClosed = true;
+          // Kick one last drain in case the queue is already empty
+          void drainLogQueue();
+          void logFinished.then(() => {
             resolve({
               exitCode: code,
               signal,
