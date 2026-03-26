@@ -249,15 +249,19 @@ if [ "$dry_run" = true ]; then
   release_info "  [dry-run] Would create git tag $tag_name on $CURRENT_SHA"
 else
   release_info "==> Step 5/7: Publishing packages to npm..."
+  _pub_verify_attempts="${NPM_PUBLISH_VERIFY_ATTEMPTS:-12}"
+  _pub_verify_delay="${NPM_PUBLISH_VERIFY_DELAY_SECONDS:-5}"
   while IFS=$'\t' read -r pkg_dir pkg_name pkg_version; do
     [ -z "$pkg_dir" ] && continue
     release_info "  Publishing $pkg_name@$pkg_version"
     cd "$REPO_ROOT/$pkg_dir"
-    if ! pnpm publish --no-git-checks --tag "$DIST_TAG" --access public; then
-      # npm sometimes returns a spurious 404 on first publish to a new scope or on
-      # registry propagation lag. Verify the version actually landed before failing.
-      release_warn "pnpm publish returned an error for $pkg_name@$pkg_version — verifying npm..."
-      if wait_for_npm_package_version "$pkg_name" "$pkg_version" 6 5; then
+    # Use npm publish directly to avoid pnpm wrapper issues with scoped packages.
+    # npm sometimes returns a spurious 404 on first publish (registry propagation
+    # lag or scope initialization). If publish fails, verify the version landed
+    # before failing hard — it may have been queued and processed asynchronously.
+    if ! npm publish --tag "$DIST_TAG" --access public; then
+      release_warn "npm publish returned an error for $pkg_name@$pkg_version — verifying npm..."
+      if wait_for_npm_package_version "$pkg_name" "$pkg_version" "$_pub_verify_attempts" "$_pub_verify_delay"; then
         release_warn "  Version $pkg_name@$pkg_version confirmed on npm despite publish error. Continuing."
       else
         release_fail "Failed to publish $pkg_name@$pkg_version and version was not found on npm after retries."
