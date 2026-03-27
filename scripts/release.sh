@@ -131,7 +131,10 @@ while IFS= read -r package_name; do
   PUBLIC_PACKAGE_NAMES+=("$package_name")
 done < <(printf '%s\n' "$PUBLIC_PACKAGE_INFO" | cut -f2)
 
-[ -n "$PUBLIC_PACKAGE_INFO" ] || release_fail "no public packages were found in the workspace."
+if [ -z "$PUBLIC_PACKAGE_INFO" ]; then
+  release_info "No public packages found in the workspace — all packages are private. Skipping release."
+  exit 0
+fi
 
 TARGET_STABLE_VERSION="$(next_stable_version "$RELEASE_DATE" "${PUBLIC_PACKAGE_NAMES[@]}")"
 TARGET_PUBLISH_VERSION="$TARGET_STABLE_VERSION"
