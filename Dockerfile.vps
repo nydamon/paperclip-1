@@ -17,6 +17,7 @@ COPY packages/adapter-utils/package.json packages/adapter-utils/
 COPY packages/plugins/sdk/package.json packages/plugins/sdk/
 COPY packages/plugins/create-paperclip-plugin/package.json packages/plugins/create-paperclip-plugin/
 COPY packages/plugins/github-integration/package.json packages/plugins/github-integration/
+COPY packages/plugins/qa-gate/package.json packages/plugins/qa-gate/
 COPY packages/adapters/claude-local/package.json packages/adapters/claude-local/
 COPY packages/adapters/codex-local/package.json packages/adapters/codex-local/
 COPY packages/adapters/cursor-local/package.json packages/adapters/cursor-local/
@@ -35,6 +36,7 @@ RUN test -f ui/dist/index.html || (echo "ERROR: ui/dist missing. Build UI before
 RUN pnpm --filter @paperclipai/adapter-utils build && \
     pnpm --filter @paperclipai/plugin-sdk build && \
     pnpm --filter @paperclipai/plugin-github build && \
+    pnpm --filter @paperclipai/plugin-qa-gate build && \
     pnpm --filter @paperclipai/server build
 RUN test -f server/dist/index.js || (echo "ERROR: server build output missing" && exit 1)
 
