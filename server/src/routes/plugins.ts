@@ -139,6 +139,14 @@ const BUNDLED_PLUGIN_EXAMPLES: AvailablePluginExample[] = [
     localPath: "packages/plugins/examples/plugin-kitchen-sink-example",
     tag: "example",
   },
+  {
+    packageName: "@paperclipai/plugin-qa-gate",
+    pluginKey: "paperclipai.qa-gate",
+    displayName: "QA Gate",
+    description: "Blocks 'done' status transitions on code-delivery issues unless a @qa-agent PASS comment exists. Board users and issues labelled no-code/research/docs/backlog bypass the gate.",
+    localPath: "packages/plugins/qa-gate",
+    tag: "automation",
+  },
 ];
 
 function listBundledPluginExamples(): AvailablePluginExample[] {
