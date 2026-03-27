@@ -91,7 +91,7 @@ interface AvailablePluginExample {
   displayName: string;
   description: string;
   localPath: string;
-  tag: "example";
+  tag: "example" | "automation";
 }
 
 /** Response body for GET /api/plugins/:pluginId/health */
@@ -1264,9 +1264,14 @@ export function pluginRoutes(
   /**
    * POST /api/plugins/:pluginId/enable
    *
-   * Enable a plugin that is currently disabled or in error state.
+   * Enable a plugin that is currently installed, disabled, or in error state.
    *
-   * Transitions the plugin to 'ready' state after loading and validation.
+   * - `installed`        → calls lifecycle.load()   (initial activation)
+   * - `disabled`         → calls lifecycle.enable() (re-enable)
+   * - `error`            → calls lifecycle.enable() (recovery)
+   * - `upgrade_pending`  → calls lifecycle.enable() (approve upgrade)
+   *
+   * Transitions the plugin to 'ready' state and starts its worker.
    *
    * Response: PluginRecord
    * Errors: 404 if plugin not found, 400 for lifecycle errors
@@ -1282,7 +1287,12 @@ export function pluginRoutes(
     }
 
     try {
-      const result = await lifecycle.enable(plugin.id);
+      // Plugins in 'installed' status need lifecycle.load() to transition to
+      // ready; lifecycle.enable() only handles disabled/error/upgrade_pending.
+      const result =
+        plugin.status === "installed"
+          ? await lifecycle.load(plugin.id)
+          : await lifecycle.enable(plugin.id);
       await logPluginMutationActivity(req, "plugin.enabled", plugin.id, {
         pluginId: plugin.id,
         pluginKey: plugin.pluginKey,
@@ -1304,7 +1314,7 @@ export function pluginRoutes(
    * Request body (optional):
    * - reason: Human-readable reason for disabling
    *
-   * The plugin transitions to 'installed' state and stops processing events.
+   * The plugin transitions to 'disabled' state and stops processing events.
    *
    * Response: PluginRecord
    * Errors: 404 if plugin not found, 400 for lifecycle errors
