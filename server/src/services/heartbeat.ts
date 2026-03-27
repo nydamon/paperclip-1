@@ -29,7 +29,7 @@ import { companySkillService } from "./company-skills.js";
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
 import { secretService } from "./secrets.js";
 import { resolveDefaultAgentWorkspaceDir, resolveManagedProjectWorkspaceDir } from "../home-paths.js";
-import { summarizeHeartbeatRunResultJson } from "./heartbeat-run-summary.js";
+import { capResultJsonForStorage, summarizeHeartbeatRunResultJson } from "./heartbeat-run-summary.js";
 import {
   buildWorkspaceReadyComment,
   cleanupExecutionWorkspaceArtifacts,
@@ -2676,7 +2676,7 @@ export function heartbeatService(db: Db) {
         exitCode: adapterResult.exitCode,
         signal: adapterResult.signal,
         usageJson,
-        resultJson: adapterResult.resultJson ?? null,
+        resultJson: capResultJsonForStorage(adapterResult.resultJson) ?? null,
         sessionIdAfter: nextSessionState.displayId ?? nextSessionState.legacySessionId,
         stdoutExcerpt,
         stderrExcerpt,
@@ -2730,6 +2730,10 @@ export function heartbeatService(db: Db) {
         }
       }
       await finalizeAgentStatus(agent.id, outcome);
+
+      // Release large adapter result to allow GC before the run scope ends.
+      // resultJson can be multi-MB (raw stdout/stderr from CLI adapters).
+      (adapterResult as unknown as Record<string, unknown>).resultJson = null;
     } catch (err) {
       const message = redactCurrentUserText(
         err instanceof Error ? err.message : "Unknown adapter failure",
