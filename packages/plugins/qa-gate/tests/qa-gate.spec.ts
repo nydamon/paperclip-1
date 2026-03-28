@@ -231,6 +231,28 @@ describe("QA gate plugin", () => {
     expect(issue?.status).toBe("done");
   });
 
+  it("allows done for stale-operational cleanup wording without labels", async () => {
+    const harness = await setup();
+    harness.seed({
+      issues: [
+        makeIssue({
+          status: "done",
+          title: "Stale-operational cleanup ticket",
+          description: "Close duplicate from stale-ci/cd incident thread",
+        }),
+      ],
+    });
+
+    await harness.emit(
+      "issue.updated",
+      { status: "done" },
+      { entityId: ISSUE_ID, entityType: "issue", companyId: COMPANY_ID, actorType: "agent" },
+    );
+
+    const issue = await harness.ctx.issues.get(ISSUE_ID, COMPANY_ID);
+    expect(issue?.status).toBe("done");
+  });
+
   it("ignores updates where status is not done", async () => {
     const harness = await setup();
     harness.seed({ issues: [makeIssue({ status: "in_progress" })] });

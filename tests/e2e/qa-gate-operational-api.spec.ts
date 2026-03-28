@@ -1,119 +1,114 @@
 import { expect, test } from "@playwright/test";
+import { createTestHarness } from "../../packages/plugins/sdk/src/testing.ts";
+import type { Issue, IssueComment } from "../../packages/plugins/sdk/src/index.ts";
+import manifest from "../../packages/plugins/qa-gate/src/manifest.js";
+import plugin, { BLOCK_COMMENT } from "../../packages/plugins/qa-gate/src/worker.js";
 
-const API_URL = process.env.PAPERCLIP_API_URL;
-const API_KEY = process.env.PAPERCLIP_API_KEY;
-const RUN_ID = process.env.PAPERCLIP_RUN_ID ?? `manual-${Date.now()}`;
+const COMPANY_ID = "company-e2e";
+const ISSUE_ID = "issue-e2e";
 
-test.describe("QA gate operational bypass", () => {
-  test.skip(!API_URL || !API_KEY, "Requires PAPERCLIP_API_URL and PAPERCLIP_API_KEY");
+function makeIssue(overrides: Partial<Issue> = {}): Issue {
+  const now = new Date();
+  return {
+    id: ISSUE_ID,
+    companyId: COMPANY_ID,
+    projectId: null,
+    projectWorkspaceId: null,
+    goalId: null,
+    parentId: null,
+    title: "Issue",
+    description: null,
+    status: "done",
+    priority: "medium",
+    assigneeAgentId: "agent-1",
+    assigneeUserId: null,
+    checkoutRunId: null,
+    executionRunId: null,
+    executionAgentNameKey: null,
+    executionLockedAt: null,
+    createdByAgentId: "agent-1",
+    createdByUserId: null,
+    issueNumber: 1,
+    identifier: "DLD-1",
+    requestDepth: 0,
+    billingCode: null,
+    assigneeAdapterOverrides: null,
+    executionWorkspaceId: null,
+    executionWorkspacePreference: null,
+    executionWorkspaceSettings: null,
+    startedAt: now,
+    completedAt: now,
+    cancelledAt: null,
+    hiddenAt: null,
+    labels: [],
+    labelIds: [],
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
 
-  test("keeps stale operational cleanup tickets in done", async ({ request }) => {
-    const authHeaders = {
-      Authorization: `Bearer ${API_KEY}`,
-      "Content-Type": "application/json",
-    };
+function makeComment(body: string): IssueComment {
+  const now = new Date();
+  return {
+    id: `comment-${Math.random()}`,
+    companyId: COMPANY_ID,
+    issueId: ISSUE_ID,
+    authorAgentId: "agent-qa",
+    authorUserId: null,
+    body,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
 
-    const meRes = await request.get(`${API_URL}/api/agents/me`, { headers: authHeaders });
-    expect(meRes.ok()).toBe(true);
-    const me = await meRes.json();
-    const companyId: string = me.companyId;
+async function setupHarness() {
+  const harness = createTestHarness({ manifest });
+  await plugin.definition.setup(harness.ctx);
+  return harness;
+}
 
-    const createRes = await request.post(`${API_URL}/api/companies/${companyId}/issues`, {
-      headers: {
-        ...authHeaders,
-        "X-Paperclip-Run-Id": RUN_ID,
-      },
-      data: {
-        title: `Stale CI/CD duplicate cleanup ${Date.now()}`,
-        description: "Operational incident RCA cleanup ticket",
-        status: "todo",
-      },
+test.describe("QA gate operational bypass flow", () => {
+  test("stale operational cleanup stays done", async () => {
+    const harness = await setupHarness();
+    harness.seed({
+      issues: [
+        makeIssue({
+          status: "done",
+          title: "Stale CI/CD duplicate cleanup",
+          description: "Operational incident RCA cleanup ticket",
+        }),
+      ],
     });
-    expect(createRes.ok()).toBe(true);
-    const created = await createRes.json();
 
-    const doneRes = await request.patch(`${API_URL}/api/issues/${created.id}`, {
-      headers: {
-        ...authHeaders,
-        "X-Paperclip-Run-Id": RUN_ID,
-      },
-      data: {
-        status: "done",
-      },
-    });
-    expect(doneRes.ok()).toBe(true);
+    await harness.emit(
+      "issue.updated",
+      { status: "done" },
+      { entityId: ISSUE_ID, entityType: "issue", companyId: COMPANY_ID, actorType: "agent" },
+    );
 
-    await expect
-      .poll(
-        async () => {
-          const issueRes = await request.get(`${API_URL}/api/issues/${created.id}`, { headers: authHeaders });
-          const issue = await issueRes.json();
-          return issue.status as string;
-        },
-        { timeout: 15_000, intervals: [500, 1000, 2000] },
-      )
-      .toBe("done");
+    const issue = await harness.ctx.issues.get(ISSUE_ID, COMPANY_ID);
+    expect(issue?.status).toBe("done");
+    const comments = await harness.ctx.issues.listComments(ISSUE_ID, COMPANY_ID);
+    expect(comments.some((c) => c.body === BLOCK_COMMENT)).toBe(false);
   });
 
-  test("reverts code-delivery tickets to in_review without QA PASS", async ({ request }) => {
-    const authHeaders = {
-      Authorization: `Bearer ${API_KEY}`,
-      "Content-Type": "application/json",
-    };
-
-    const meRes = await request.get(`${API_URL}/api/agents/me`, { headers: authHeaders });
-    expect(meRes.ok()).toBe(true);
-    const me = await meRes.json();
-    const companyId: string = me.companyId;
-
-    const createRes = await request.post(`${API_URL}/api/companies/${companyId}/issues`, {
-      headers: {
-        ...authHeaders,
-        "X-Paperclip-Run-Id": RUN_ID,
-      },
-      data: {
-        title: `Code delivery QA gate check ${Date.now()}`,
-        description: "Implement code change and close without QA PASS",
-        status: "todo",
-      },
+  test("code-delivery without QA PASS reopens to in_review", async () => {
+    const harness = await setupHarness();
+    harness.seed({
+      issues: [makeIssue({ status: "done", title: "Implement feature flag" })],
+      issueComments: [makeComment("Developer marked done without QA review")],
     });
-    expect(createRes.ok()).toBe(true);
-    const created = await createRes.json();
 
-    const doneRes = await request.patch(`${API_URL}/api/issues/${created.id}`, {
-      headers: {
-        ...authHeaders,
-        "X-Paperclip-Run-Id": RUN_ID,
-      },
-      data: {
-        status: "done",
-      },
-    });
-    expect(doneRes.ok()).toBe(true);
+    await harness.emit(
+      "issue.updated",
+      { status: "done" },
+      { entityId: ISSUE_ID, entityType: "issue", companyId: COMPANY_ID, actorType: "agent" },
+    );
 
-    await expect
-      .poll(
-        async () => {
-          const issueRes = await request.get(`${API_URL}/api/issues/${created.id}`, { headers: authHeaders });
-          const issue = await issueRes.json();
-          return issue.status as string;
-        },
-        { timeout: 15_000, intervals: [500, 1000, 2000] },
-      )
-      .toBe("in_review");
-
-    await expect
-      .poll(
-        async () => {
-          const commentsRes = await request.get(`${API_URL}/api/issues/${created.id}/comments`, {
-            headers: authHeaders,
-          });
-          const comments = await commentsRes.json();
-          return comments.some((c: { body?: string }) => c.body?.includes("**QA gate:**"));
-        },
-        { timeout: 15_000, intervals: [500, 1000, 2000] },
-      )
-      .toBe(true);
+    const issue = await harness.ctx.issues.get(ISSUE_ID, COMPANY_ID);
+    expect(issue?.status).toBe("in_review");
+    const comments = await harness.ctx.issues.listComments(ISSUE_ID, COMPANY_ID);
+    expect(comments.some((c) => c.body === BLOCK_COMMENT)).toBe(true);
   });
 });
-
