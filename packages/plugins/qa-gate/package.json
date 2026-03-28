@@ -1,6 +1,6 @@
 {
   "name": "@paperclipai/plugin-qa-gate",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Paperclip plugin that blocks done status transitions on code-delivery issues unless a @qa-agent PASS comment exists",
   "type": "module",
   "private": true,

@@ -5,9 +5,7 @@ export default defineConfig({
   testMatch: "**/qa-gate-operational-api.spec.ts",
   timeout: 45_000,
   retries: 0,
-  use: {
-    headless: true,
-  },
+  use: { headless: true },
   projects: [
     {
       name: "api",
@@ -15,4 +13,3 @@ export default defineConfig({
   ],
   reporter: [["list"]],
 });
-

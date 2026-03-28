@@ -23,6 +23,7 @@ const SKIP_LABELS = new Set([
 
 const NON_CODE_TEXT_PATTERNS: RegExp[] = [
   /\bstale\b.*\b(duplicate|ci|ci\/cd|pipeline|operational)\b/i,
+  /\bstale[-\s]?(operational|ci\/?cd)\b/i,
   /\b(incident|rca|postmortem)\b/i,
   /\b(policy|process)\b.*\b(doc|docs|documentation|cleanup)\b/i,
 ];
