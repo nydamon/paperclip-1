@@ -5,7 +5,27 @@ import manifest from "./manifest.js";
  * Labels that exempt an issue from the QA gate.
  * Matched case-insensitively against the issue's label names.
  */
-const SKIP_LABELS = new Set(["no-code", "research", "docs", "backlog"]);
+const SKIP_LABELS = new Set([
+  "no-code",
+  "research",
+  "docs",
+  "backlog",
+  "ops",
+  "operations",
+  "incident",
+  "rca",
+  "postmortem",
+  "policy",
+  "process",
+  "ci",
+  "ci/cd",
+]);
+
+const NON_CODE_TEXT_PATTERNS: RegExp[] = [
+  /\bstale\b.*\b(duplicate|ci|ci\/cd|pipeline|operational)\b/i,
+  /\b(incident|rca|postmortem)\b/i,
+  /\b(policy|process)\b.*\b(doc|docs|documentation|cleanup)\b/i,
+];
 
 /**
  * Pattern that constitutes a QA pass: a comment body containing "@qa-agent PASS"
@@ -49,6 +69,10 @@ const plugin = definePlugin({
       // Label-based bypass: skip gate for non-code-delivery issue types.
       const issueLabels = (issue.labels ?? []).map((l: { name: string }) => l.name.toLowerCase());
       if (issueLabels.some((l: string) => SKIP_LABELS.has(l))) return;
+
+      // Text-based bypass for stale/operational cleanup tickets that may not carry labels yet.
+      const searchableText = `${issue.title ?? ""}\n${issue.description ?? ""}`;
+      if (NON_CODE_TEXT_PATTERNS.some((pattern) => pattern.test(searchableText))) return;
 
       // Check for a qualifying @qa-agent PASS comment.
       const comments = await ctx.issues.listComments(issueId, companyId);

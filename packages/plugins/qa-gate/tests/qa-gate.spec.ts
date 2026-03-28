@@ -193,6 +193,44 @@ describe("QA gate plugin", () => {
     expect(issue?.status).toBe("done");
   });
 
+  it("allows done for issues with ops label", async () => {
+    const harness = await setup();
+    harness.seed({
+      issues: [makeIssue({ status: "done", labels: [makeLabel("ops")] })],
+    });
+
+    await harness.emit(
+      "issue.updated",
+      { status: "done" },
+      { entityId: ISSUE_ID, entityType: "issue", companyId: COMPANY_ID, actorType: "agent" },
+    );
+
+    const issue = await harness.ctx.issues.get(ISSUE_ID, COMPANY_ID);
+    expect(issue?.status).toBe("done");
+  });
+
+  it("allows done for stale CI/CD duplicate operational tickets without labels", async () => {
+    const harness = await setup();
+    harness.seed({
+      issues: [
+        makeIssue({
+          status: "done",
+          title: "Stale CI/CD duplicate issue cleanup",
+          description: "Close stale operational duplicate after deploy incident triage",
+        }),
+      ],
+    });
+
+    await harness.emit(
+      "issue.updated",
+      { status: "done" },
+      { entityId: ISSUE_ID, entityType: "issue", companyId: COMPANY_ID, actorType: "agent" },
+    );
+
+    const issue = await harness.ctx.issues.get(ISSUE_ID, COMPANY_ID);
+    expect(issue?.status).toBe("done");
+  });
+
   it("ignores updates where status is not done", async () => {
     const harness = await setup();
     harness.seed({ issues: [makeIssue({ status: "in_progress" })] });
