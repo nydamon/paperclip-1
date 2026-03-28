@@ -286,7 +286,7 @@ jobs:
         run: |
           tag="$(git tag --points-at HEAD | grep '^canary/v' | head -1)"
           if [ -z "$tag" ]; then
-            echo "Error: no canary tag points at HEAD after release." >&2
-            exit 1
+            echo "No canary tag at HEAD — all packages are private, release was skipped. Nothing to push."
+            exit 0
           fi
           git push origin "refs/tags/${tag}"
