@@ -143,7 +143,7 @@ const BUNDLED_PLUGIN_EXAMPLES: AvailablePluginExample[] = [
     packageName: "@paperclipai/plugin-qa-gate",
     pluginKey: "paperclipai.qa-gate",
     displayName: "QA Gate",
-    description: "Blocks 'done' status transitions on code-delivery issues unless a @qa-agent PASS comment exists. Board users and issues labelled no-code/research/docs/backlog bypass the gate.",
+    description: "Blocks 'done' status transitions on code-delivery issues unless a @qa-agent PASS comment exists. Board users and non-code operational tickets (label or stale-ops text signals) bypass the gate.",
     localPath: "packages/plugins/qa-gate",
     tag: "automation",
   },
