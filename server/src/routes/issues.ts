@@ -844,9 +844,17 @@ export function issueRoutes(db: Db, storage: StorageService) {
       typeof req.body.assigneeUserId === "string" &&
       !!existing.createdByUserId &&
       req.body.assigneeUserId === existing.createdByUserId;
+    const isAgentBlockingAndReleasingOwnReviewIssue =
+      req.actor.type === "agent" &&
+      !!req.actor.agentId &&
+      existing.status === "in_review" &&
+      existing.assigneeAgentId === req.actor.agentId &&
+      req.body.status === "blocked" &&
+      req.body.assigneeAgentId === null &&
+      req.body.assigneeUserId === null;
 
     if (assigneeWillChange) {
-      if (!isAgentReturningIssueToCreator) {
+      if (!isAgentReturningIssueToCreator && !isAgentBlockingAndReleasingOwnReviewIssue) {
         await assertCanAssignTasks(req, existing.companyId);
       }
     }

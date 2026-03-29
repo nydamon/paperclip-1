@@ -281,4 +281,46 @@ describe("issueService.list participantAgentId", () => {
 
     expect(result.map((issue) => issue.id)).toEqual([matchedIssueId]);
   });
+
+  it("rejects creating in_review issues without an assignee", async () => {
+    const companyId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await expect(
+      svc.create(companyId, {
+        title: "Review without reviewer",
+        status: "in_review",
+        priority: "medium",
+      }),
+    ).rejects.toThrow("in_review issues require a reviewer assignee");
+  });
+
+  it("rejects updating an issue to in_review when no reviewer is assigned", async () => {
+    const companyId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    const created = await svc.create(companyId, {
+      title: "Execution task",
+      status: "todo",
+      priority: "medium",
+    });
+
+    await expect(
+      svc.update(created.id, {
+        status: "in_review",
+      }),
+    ).rejects.toThrow("in_review issues require a reviewer assignee");
+  });
 });

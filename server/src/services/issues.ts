@@ -20,7 +20,7 @@ import {
   projectWorkspaces,
   projects,
 } from "@paperclipai/db";
-import { extractAgentMentionIds, extractProjectMentionIds } from "@paperclipai/shared";
+import { extractAgentMentionIds, extractProjectMentionIds, normalizeAgentUrlKey } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import {
   defaultIssueExecutionWorkspaceSettingsForProject,
@@ -792,6 +792,9 @@ export function issueService(db: Db) {
       if (data.status === "in_progress" && !data.assigneeAgentId && !data.assigneeUserId) {
         throw unprocessable("in_progress issues require an assignee");
       }
+      if (data.status === "in_review" && !data.assigneeAgentId && !data.assigneeUserId) {
+        throw unprocessable("in_review issues require a reviewer assignee");
+      }
       return db.transaction(async (tx) => {
         const defaultCompanyGoal = await getDefaultCompanyGoal(tx, companyId);
         const projectGoalId = await getProjectDefaultGoalId(tx, companyId, issueData.projectId);
@@ -909,6 +912,10 @@ export function issueService(db: Db) {
       }
       if (patch.status === "in_progress" && !nextAssigneeAgentId && !nextAssigneeUserId) {
         throw unprocessable("in_progress issues require an assignee");
+      }
+      const nextStatus = patch.status ?? existing.status;
+      if (nextStatus === "in_review" && !nextAssigneeAgentId && !nextAssigneeUserId) {
+        throw unprocessable("in_review issues require a reviewer assignee");
       }
       if (issueData.assigneeAgentId) {
         await assertAssignableAgent(existing.companyId, issueData.assigneeAgentId);
@@ -1564,6 +1571,11 @@ export function issueService(db: Db) {
       const resolved = new Set<string>(explicitAgentMentionIds);
       for (const agent of rows) {
         if (tokens.has(agent.name.toLowerCase())) {
+          resolved.add(agent.id);
+          continue;
+        }
+        const agentUrlKey = normalizeAgentUrlKey(agent.name);
+        if (agentUrlKey && tokens.has(agentUrlKey)) {
           resolved.add(agent.id);
         }
       }
