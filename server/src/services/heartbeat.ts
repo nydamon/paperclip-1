@@ -1613,6 +1613,85 @@ export function heartbeatService(db: Db) {
     return queued;
   }
 
+  const QUOTA_RETRY_DEFAULT_DELAY_MS = 30 * 60 * 1000;
+  const QUOTA_RETRY_MAX_DELAY_MS = 60 * 60 * 1000;
+
+  function parseQuotaResetsAtLabel(label: string | null | undefined): Date | null {
+    if (!label) return null;
+
+    const lower = label.toLowerCase();
+
+    const timeMatch = lower.match(/(\d{1,2})(?::(\d{2}))?\(\s*(am|pm)\)/);
+    if (timeMatch) {
+      const hours = parseInt(timeMatch[1], 10);
+      const minutes = parseInt(timeMatch[2] || "0", 10);
+      const now = new Date();
+      const target = new Date(now);
+      target.setUTCHours(hours, minutes, 0, 0);
+      if (target <= now) {
+        target.setUTCDate(target.getUTCDate() + 1);
+      }
+      return target;
+    }
+
+    if (lower.includes("30 min") || lower.includes("30min")) return new Date(Date.now() + 30 * 60 * 1000);
+    if (lower.includes("1 hour") || lower.includes("1hour")) return new Date(Date.now() + 60 * 60 * 1000);
+
+    return null;
+  }
+
+  async function scheduleQuotaRetry(
+    run: typeof heartbeatRuns.$inferSelect,
+    adapterResult: AdapterExecutionResult,
+  ) {
+    const resetLabel = (adapterResult.errorMeta as Record<string, unknown> | null)?.resetLabel as string | null;
+    const resetTime = parseQuotaResetsAtLabel(resetLabel);
+    const now = new Date();
+    const retryAt = resetTime ?? new Date(now.getTime() + QUOTA_RETRY_DEFAULT_DELAY_MS);
+    const delayMs = Math.min(
+      Math.max(retryAt.getTime() - now.getTime(), 30_000),
+      QUOTA_RETRY_MAX_DELAY_MS,
+    );
+    const retryAtClamped = new Date(now.getTime() + delayMs);
+
+    const agent = await getAgent(run.agentId);
+    if (!agent) return;
+
+    const contextSnapshot = parseObject(run.contextSnapshot);
+    const issueId = readNonEmptyString(contextSnapshot.issueId);
+
+    if (issueId) {
+      await db
+        .update(issues)
+        .set({
+          processLostRetryAt: retryAtClamped,
+          updatedAt: now,
+        })
+        .where(and(eq(issues.id, issueId), eq(issues.companyId, run.companyId)));
+    }
+
+    await appendRunEvent(run, 0, {
+      eventType: "lifecycle",
+      stream: "system",
+      level: "warn",
+      message: `Quota exhausted — automatic retry scheduled`,
+      payload: {
+        errorCode: "quota_exhausted",
+        resetLabel: resetLabel ?? "unknown",
+        retryAt: retryAtClamped.toISOString(),
+        delayMs,
+      },
+    });
+
+    logger.info({
+      runId: run.id,
+      agentId: run.agentId,
+      errorCode: "quota_exhausted",
+      resetLabel,
+      retryAt: retryAtClamped.toISOString(),
+    }, "quota exhausted — scheduled retry");
+  }
+
   function parseHeartbeatPolicy(agent: typeof agents.$inferSelect) {
     const runtimeConfig = parseObject(agent.runtimeConfig);
     const heartbeat = parseObject(runtimeConfig.heartbeat);
@@ -2657,6 +2736,15 @@ export function heartbeatService(db: Db) {
             } as Record<string, unknown>)
           : null;
 
+      const errorCode =
+        outcome === "timed_out"
+          ? "timeout"
+          : outcome === "cancelled"
+            ? "cancelled"
+            : outcome === "failed"
+              ? (adapterResult.errorCode ?? "adapter_failed")
+              : null as string | null;
+
       await setRunStatus(run.id, status, {
         finishedAt: new Date(),
         error:
@@ -2666,14 +2754,7 @@ export function heartbeatService(db: Db) {
                 adapterResult.errorMessage ?? (outcome === "timed_out" ? "Timed out" : "Adapter failed"),
                 currentUserRedactionOptions,
               ),
-        errorCode:
-          outcome === "timed_out"
-            ? "timeout"
-            : outcome === "cancelled"
-              ? "cancelled"
-              : outcome === "failed"
-                ? (adapterResult.errorCode ?? "adapter_failed")
-                : null,
+        errorCode,
         exitCode: adapterResult.exitCode,
         signal: adapterResult.signal,
         usageJson,
@@ -2703,7 +2784,12 @@ export function heartbeatService(db: Db) {
             exitCode: adapterResult.exitCode,
           },
         });
-        await releaseIssueExecutionAndPromote(finalizedRun);
+
+        if (errorCode === "quota_exhausted") {
+          await scheduleQuotaRetry(finalizedRun, adapterResult);
+        } else {
+          await releaseIssueExecutionAndPromote(finalizedRun);
+        }
       }
 
       if (finalizedRun) {
@@ -3912,8 +3998,7 @@ export function heartbeatService(db: Db) {
       return { expired: expired.length };
     },
 
-    async enqueueProcessLostRetries() {
-      // Find issues whose process_lost_retry_at has elapsed and enqueue a wakeup.
+    async enqueueDeferredRetries() {
       const now = new Date();
       const due = await db
         .select({ id: issues.id, assigneeAgentId: issues.assigneeAgentId })
@@ -3923,19 +4008,23 @@ export function heartbeatService(db: Db) {
       const enqueued: string[] = [];
       for (const issue of due) {
         if (!issue.assigneeAgentId) continue;
-        await db.update(issues).set({ processLostRetryAt: null, updatedAt: now }).where(eq(issues.id, issue.id));
+        const retryReason = "quota_retry";
         await enqueueWakeup(issue.assigneeAgentId, {
           source: "automation",
           triggerDetail: "system",
-          reason: "process_lost_retry",
+          reason: retryReason,
           requestedByActorType: "system",
           requestedByActorId: "heartbeat_scheduler",
-          contextSnapshot: { issueId: issue.id, source: "process_lost_retry" },
+          contextSnapshot: {
+            issueId: issue.id,
+            source: retryReason,
+          },
         });
         enqueued.push(issue.id);
       }
+
       if (enqueued.length > 0) {
-        logger.info({ count: enqueued.length }, "enqueued process_lost retries");
+        logger.info({ count: enqueued.length }, "enqueued deferred quota retries");
       }
       return { enqueued: enqueued.length };
     },
