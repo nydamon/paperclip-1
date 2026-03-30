@@ -93,6 +93,64 @@ Notes:
 - Without API keys, the app still runs normally.
 - Adapter environment checks in Paperclip will surface missing auth/CLI prerequisites.
 
+## Stripe (test / integration)
+
+Paperclip reads Stripe keys from the environment (no billing routes ship yet; keys are normalized for upcoming use and for Stripe SDK defaults).
+
+**Preferred names (test keys):**
+
+- `STRIPE_TEST_PUBLISHABLE_KEY`
+- `STRIPE_TEST_SECRET_KEY`
+
+**Backward-compatible aliases:**
+
+- `STRIPE_PUBLISHABLE_KEY`
+- `STRIPE_SECRET_KEY`
+
+If both prefixed and generic variables are set, **`STRIPE_TEST_*` wins**. On startup the server sets `STRIPE_PUBLISHABLE_KEY` and `STRIPE_SECRET_KEY` to the resolved values so libraries that only read the standard names still work.
+
+`GET /api/health` includes `features.stripe.publishableKey` and `features.stripe.secretKey` as booleans (never key material).
+
+**VPS:** add the variables to `/opt/paperclip/.env` on the host; `docker-compose.vps.yml` passes them into the server container. Use test keys until live billing is intentional.
+
+## VPS Production Deployment
+
+For production deployment to a VPS with automated CI/CD, use the dedicated VPS setup:
+
+```sh
+# Production deployment (automated via GitHub Actions)
+# See doc/VPS-DEPLOYMENT.md for full details
+```
+
+**Key differences from local quickstart:**
+
+| Aspect | Local Quickstart | VPS Production |
+|--------|-----------------|----------------|
+| Compose file | `docker-compose.quickstart.yml` | `docker-compose.vps.yml` |
+| Dockerfile | `Dockerfile` (full build) | `Dockerfile.vps` (fast, uses prebuilt `ui/dist`) |
+| Database | Exposed on host port 5432 | Internal only (not exposed) |
+| OpenCode | Optional | Required with API keys |
+| Public URL | Defaults to localhost | Must be explicit external URL |
+
+**Files:**
+- `docker-compose.vps.yml` - Production orchestration
+- `Dockerfile.vps` - Optimized build for VPS (expects prebuilt UI)
+- `.github/workflows/deploy-vultr.yml` - GitHub Actions CI/CD
+- `scripts/docker-entrypoint.sh` - Container bootstrap
+
+See [VPS-DEPLOYMENT.md](VPS-DEPLOYMENT.md) for complete setup instructions including:
+- Required GitHub secrets
+- VPS environment configuration
+- SSH key setup
+- Deployment validation
+- Recovery procedures
+
+## Untrusted PR Review Container
+
+If you want a separate Docker environment for reviewing untrusted pull requests with `codex` or `claude`, use the dedicated review workflow in `doc/UNTRUSTED-PR-REVIEW.md`.
+
+That setup keeps CLI auth state in Docker volumes instead of your host home directory and uses a separate scratch workspace for PR checkouts and preview runs.
+
 ## Onboard Smoke Test (Ubuntu + npm only)
 
 Use this when you want to mimic a fresh machine that only has Ubuntu + npm and verify:
@@ -114,6 +172,7 @@ Useful overrides:
 ```sh
 HOST_PORT=3200 PAPERCLIPAI_VERSION=latest ./scripts/docker-onboard-smoke.sh
 PAPERCLIP_DEPLOYMENT_MODE=authenticated PAPERCLIP_DEPLOYMENT_EXPOSURE=private ./scripts/docker-onboard-smoke.sh
+SMOKE_DETACH=true SMOKE_METADATA_FILE=/tmp/paperclip-smoke.env PAPERCLIPAI_VERSION=latest ./scripts/docker-onboard-smoke.sh
 ```
 
 Notes:
@@ -125,4 +184,5 @@ Notes:
 - Smoke script also defaults `PAPERCLIP_PUBLIC_URL` to `http://localhost:<HOST_PORT>` so bootstrap invite URLs and auth callbacks use the reachable host port instead of the container's internal `3100`.
 - In authenticated mode, the smoke script defaults `SMOKE_AUTO_BOOTSTRAP=true` and drives the real bootstrap path automatically: it signs up a real user, runs `paperclipai auth bootstrap-ceo` inside the container to mint a real bootstrap invite, accepts that invite over HTTP, and verifies board session access.
 - Run the script in the foreground to watch the onboarding flow; stop with `Ctrl+C` after validation.
+- Set `SMOKE_DETACH=true` to leave the container running for automation and optionally write shell-ready metadata to `SMOKE_METADATA_FILE`.
 - The image definition is in `Dockerfile.onboard-smoke`.

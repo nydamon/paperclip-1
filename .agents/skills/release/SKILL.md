@@ -2,23 +2,21 @@
 name: release
 description: >
   Coordinate a full Paperclip release across engineering verification, npm,
-  GitHub, website publishing, and announcement follow-up. Use when leadership
-  asks to ship a release, not merely to discuss version bumps.
+  GitHub, smoke testing, and announcement follow-up. Use when leadership asks
+  to ship a release, not merely to discuss versioning.
 ---
 
 # Release Coordination Skill
 
-Run the full Paperclip release as a maintainer workflow, not just an npm publish.
+Run the full Paperclip maintainer release workflow, not just an npm publish.
 
 This skill coordinates:
 
 - stable changelog drafting via `release-changelog`
-- release-train setup via `scripts/release-start.sh`
-- prerelease canary publishing via `scripts/release.sh --canary`
+- canary verification and publish (manual dispatch or nightly; not every `master` push)
 - Docker smoke testing via `scripts/docker-onboard-smoke.sh`
-- stable publishing via `scripts/release.sh`
-- pushing the stable branch commit and tag
-- GitHub Release creation via `scripts/create-github-release.sh`
+- manual stable promotion from a chosen source ref
+- GitHub Release creation
 - website / announcement follow-up tasks
 
 ## Trigger
@@ -26,8 +24,9 @@ This skill coordinates:
 Use this skill when leadership asks for:
 
 - "do a release"
-- "ship the next patch/minor/major"
-- "release vX.Y.Z"
+- "ship the release"
+- "promote this canary to stable"
+- "cut the stable release"
 
 ## Preconditions
 
@@ -35,10 +34,10 @@ Before proceeding, verify all of the following:
 
 1. `.agents/skills/release-changelog/SKILL.md` exists and is usable.
 2. The repo working tree is clean, including untracked files.
-3. There are commits since the last stable tag.
-4. The release SHA has passed the verification gate or is about to.
-5. If package manifests changed, the CI-owned `pnpm-lock.yaml` refresh is already merged on `master` before the release branch is cut.
-6. npm publish rights are available locally, or the GitHub release workflow is being used with trusted publishing.
+3. There is at least one canary or candidate commit since the last stable tag.
+4. The candidate SHA has passed the verification gate or is about to.
+5. If manifests changed, the CI-owned `pnpm-lock.yaml` refresh is already merged on `master`.
+6. GitHub Environments `npm-canary` / `npm-stable` have secret **`NPM_TOKEN`**, or local `npm login` for emergency manual publish.
 7. If running through Paperclip, you have issue context for status updates and follow-up task creation.
 
 If any precondition fails, stop and report the blocker.
@@ -47,78 +46,69 @@ If any precondition fails, stop and report the blocker.
 
 Collect these inputs up front:
 
-- requested bump: `patch`, `minor`, or `major`
-- whether this run is a dry run or live release
-- whether the release is being run locally or from GitHub Actions
+- whether the target is a canary check or a stable promotion
+- the candidate `source_ref` for stable
+- whether the stable run is dry-run or live
 - release issue / company context for website and announcement follow-up
 
 ## Step 0 — Release Model
 
-Paperclip now uses this release model:
+Paperclip release model (merge, deploy, and npm are separate):
 
-1. Start or resume `release/X.Y.Z`
-2. Draft the **stable** changelog as `releases/vX.Y.Z.md`
-3. Publish one or more **prerelease canaries** such as `X.Y.Z-canary.0`
-4. Smoke test the canary via Docker
-5. Publish the stable version `X.Y.Z`
-6. Push the stable branch commit and tag
-7. Create the GitHub Release
-8. Merge `release/X.Y.Z` back to `master` without squash or rebase
-9. Complete website and announcement surfaces
+1. merging to `master` runs PR CI only — **not** npm publish
+2. **canary:** run `release.yml` with **channel `canary`**, or wait for nightly schedule
+3. canaries use `YYYY.MDD.P-canary.N`
+4. stable releases use `YYYY.MDD.P`
+5. the middle slot is `MDD`, where `M` is the UTC month and `DD` is the zero-padded UTC day
+6. the stable patch slot increments when more than one stable ships on the same UTC date
+7. stable releases are manually promoted via `release.yml` with **channel `stable`**
+8. only stable releases get `releases/vYYYY.MDD.P.md`, git tag `vYYYY.MDD.P`, and a GitHub Release
+9. app production deploy uses **Deploy Vultr** (`deploy-vultr.yml`), not the Release workflow
 
-Critical consequence:
+Critical consequences:
 
-- Canaries do **not** use promote-by-dist-tag anymore.
-- The changelog remains stable-only. Do not create `releases/vX.Y.Z-canary.N.md`.
+- do not use release branches as the default path
+- do not derive major/minor/patch bumps
+- do not create canary changelog files
+- do not create canary GitHub Releases
 
-## Step 1 — Decide the Stable Version
+## Step 1 — Choose the Candidate
 
-Start the release train first:
+For canary validation:
+
+- inspect the latest successful **Release** workflow run for channel `canary` (or nightly)
+- record the canary version and source SHA
+
+For stable promotion:
+
+1. choose the tested source ref
+2. confirm it is the exact SHA you want to promote
+3. resolve the target stable version with `./scripts/release.sh stable --date YYYY-MM-DD --print-version`
+
+Useful commands:
 
 ```bash
-./scripts/release-start.sh {patch|minor|major}
+git tag --list 'v*' --sort=-version:refname | head -1
+git log --oneline --no-merges
+npm view paperclipai@canary version
 ```
-
-Then run release preflight:
-
-```bash
-./scripts/release-preflight.sh canary {patch|minor|major}
-# or
-./scripts/release-preflight.sh stable {patch|minor|major}
-```
-
-Then use the last stable tag as the base:
-
-```bash
-LAST_TAG=$(git tag --list 'v*' --sort=-version:refname | head -1)
-git log "${LAST_TAG}..HEAD" --oneline --no-merges
-git diff --name-only "${LAST_TAG}..HEAD" -- packages/db/src/migrations/
-git diff "${LAST_TAG}..HEAD" -- packages/db/src/schema/
-git log "${LAST_TAG}..HEAD" --format="%s" | rg -n 'BREAKING CHANGE|BREAKING:|^[a-z]+!:' || true
-```
-
-Bump policy:
-
-- destructive migrations, removed APIs, breaking config changes -> `major`
-- additive migrations or clearly user-visible features -> at least `minor`
-- fixes only -> `patch`
-
-If the requested bump is too low, escalate it and explain why.
 
 ## Step 2 — Draft the Stable Changelog
 
-Invoke `release-changelog` and generate:
+Stable changelog files live at:
 
-- `releases/vX.Y.Z.md`
+- `releases/vYYYY.MDD.P.md`
+
+Invoke `release-changelog` and generate or update the stable notes only.
 
 Rules:
 
 - review the draft with a human before publish
 - preserve manual edits if the file already exists
-- keep the heading and filename stable-only, for example `v1.2.3`
-- do not create a separate canary changelog file
+- keep the filename stable-only
+- do not create a canary changelog file
 
-## Step 3 — Verify the Release SHA
+## Step 3 — Verify the Candidate SHA
 
 Run the standard gate:
 
@@ -128,41 +118,27 @@ pnpm test:run
 pnpm build
 ```
 
-If the release will be run through GitHub Actions, the workflow can rerun this gate. Still report whether the local tree currently passes.
+If the GitHub release workflow will run the publish, it can rerun this gate. Still report local status if you checked it.
 
-The GitHub Actions release workflow installs with `pnpm install --frozen-lockfile`. Treat that as a release invariant, not a nuisance: if manifests changed and the lockfile refresh PR has not landed yet, stop and wait for `master` to contain the committed lockfile before shipping.
+## Step 4 — Validate the Canary
 
-## Step 4 — Publish a Canary
+Publish or confirm a canary via `.github/workflows/release.yml`:
 
-Run from the `release/X.Y.Z` branch:
+- **channel:** `canary`
+- **source_ref:** usually `master`
+- **dry_run:** `false` to publish (or check nightly run output)
 
-```bash
-./scripts/release.sh {patch|minor|major} --canary --dry-run
-./scripts/release.sh {patch|minor|major} --canary
-```
+Confirm:
 
-What this means:
+1. workflow succeeded (`npm whoami` + publish steps)
+2. npm canary publish succeeded
+3. git tag `canary/vYYYY.MDD.P-canary.N` exists
 
-- npm receives `X.Y.Z-canary.N` under dist-tag `canary`
-- `latest` remains unchanged
-- no git tag is created
-- the script cleans the working tree afterward
-
-Guard:
-
-- if the current stable is `0.2.7`, the next patch canary is `0.2.8-canary.0`
-- the tooling must never publish `0.2.7-canary.N` after `0.2.7` is already stable
-
-After publish, verify:
+Useful checks:
 
 ```bash
 npm view paperclipai@canary version
-```
-
-The user install path is:
-
-```bash
-npx paperclipai@canary onboard
+git tag --list 'canary/v*' --sort=-version:refname | head -5
 ```
 
 ## Step 5 — Smoke Test the Canary
@@ -173,60 +149,71 @@ Run:
 PAPERCLIPAI_VERSION=canary ./scripts/docker-onboard-smoke.sh
 ```
 
+Useful isolated variant:
+
+```bash
+HOST_PORT=3232 DATA_DIR=./data/release-smoke-canary PAPERCLIPAI_VERSION=canary ./scripts/docker-onboard-smoke.sh
+```
+
 Confirm:
 
 1. install succeeds
-2. onboarding completes
-3. server boots
-4. UI loads
-5. basic company/dashboard flow works
+2. onboarding completes without crashes
+3. the server boots
+4. the UI loads
+5. basic company creation and dashboard load work
 
 If smoke testing fails:
 
 - stop the stable release
-- fix the issue
-- publish another canary
-- repeat the smoke test
+- fix the issue on `master`
+- run or wait for the next canary publish (`release.yml` channel `canary` or nightly)
+- rerun smoke testing
 
-Each retry should create a higher canary ordinal, while the stable target version can stay the same.
+## Step 6 — Preview or Publish Stable
 
-## Step 6 — Publish Stable
+The normal stable path is manual `workflow_dispatch` on:
 
-Once the SHA is vetted, run:
+- `.github/workflows/release.yml`
+
+Inputs:
+
+- **channel:** `stable`
+- `source_ref`
+- `stable_date`
+- `dry_run`
+
+Before live stable:
+
+1. resolve the target stable version with `./scripts/release.sh stable --date YYYY-MM-DD --print-version`
+2. ensure `releases/vYYYY.MDD.P.md` exists on the source ref
+3. run the stable workflow in dry-run mode first when practical
+4. then run the real stable publish
+
+The stable workflow:
+
+- re-verifies the exact source ref
+- computes the next stable patch slot for the chosen UTC date
+- publishes `YYYY.MDD.P` under dist-tag `latest`
+- creates git tag `vYYYY.MDD.P`
+- creates or updates the GitHub Release from `releases/vYYYY.MDD.P.md`
+
+Local emergency/manual commands:
 
 ```bash
-./scripts/release.sh {patch|minor|major} --dry-run
-./scripts/release.sh {patch|minor|major}
+./scripts/release.sh stable --dry-run
+./scripts/release.sh stable
+git push public-gh refs/tags/vYYYY.MDD.P
+./scripts/create-github-release.sh YYYY.MDD.P
 ```
 
-Stable publish does this:
-
-- publishes `X.Y.Z` to npm under `latest`
-- creates the local release commit
-- creates the local git tag `vX.Y.Z`
-
-Stable publish does **not** push the release for you.
-
-## Step 7 — Push and Create GitHub Release
-
-After stable publish succeeds:
-
-```bash
-git push public-gh HEAD --follow-tags
-./scripts/create-github-release.sh X.Y.Z
-```
-
-Use the stable changelog file as the GitHub Release notes source.
-
-Then open the PR from `release/X.Y.Z` back to `master` and merge without squash or rebase.
-
-## Step 8 — Finish the Other Surfaces
+## Step 7 — Finish the Other Surfaces
 
 Create or verify follow-up work for:
 
 - website changelog publishing
 - launch post / social announcement
-- any release summary in Paperclip issue context
+- release summary in Paperclip issue context
 
 These should reference the stable release, not the canary.
 
@@ -236,9 +223,9 @@ If the canary is bad:
 
 - publish another canary, do not ship stable
 
-If stable npm publish succeeds but push or GitHub release creation fails:
+If stable npm publish succeeds but tag push or GitHub release creation fails:
 
-- fix the git/GitHub issue immediately from the same checkout
+- fix the git/GitHub issue immediately from the same release result
 - do not republish the same version
 
 If `latest` is bad after stable publish:
@@ -247,15 +234,17 @@ If `latest` is bad after stable publish:
 ./scripts/rollback-latest.sh <last-good-version>
 ```
 
-Then fix forward with a new patch release.
+Then fix forward with a new stable release.
 
 ## Output
 
 When the skill completes, provide:
 
-- stable version and, if relevant, the final canary version tested
+- candidate SHA and tested canary version, if relevant
+- stable version, if promoted
 - verification status
 - npm status
+- smoke-test status
 - git tag / GitHub Release status
 - website / announcement follow-up status
 - rollback recommendation if anything is still partially complete

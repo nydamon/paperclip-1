@@ -1,0 +1,100 @@
+name: Upstream Sync
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SYNC_TOKEN: ${{ secrets.UPSTREAM_SYNC_GH_TOKEN != '' && secrets.UPSTREAM_SYNC_GH_TOKEN || github.token }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ env.SYNC_TOKEN }}
+
+      - name: Run upstream sync
+        run: |
+          set -euo pipefail
+          chmod +x ./scripts/upstream-sync.sh
+          ./scripts/upstream-sync.sh
+
+      - name: Stop when no upstream delta
+        if: ${{ hashFiles('.upstream-sync-noop') != '' }}
+        run: |
+          set -euo pipefail
+          echo "No upstream changes detected; skipping PR update."
+          cat .upstream-sync-summary.md
+
+      - name: Check remote integration branch delta
+        id: remote-delta
+        if: ${{ hashFiles('.upstream-sync-noop') == '' }}
+        run: |
+          set -euo pipefail
+          if ! git ls-remote --exit-code origin refs/heads/integration/upstream-sync > /dev/null; then
+            echo "has_delta=false" >> "$GITHUB_OUTPUT"
+            echo "integration/upstream-sync does not exist on origin; skipping PR operation."
+            exit 0
+          fi
+
+          git fetch origin master integration/upstream-sync
+          ahead_count=$(git rev-list --count origin/master..origin/integration/upstream-sync)
+          echo "integration_branch_ahead_count=$ahead_count"
+          if [ "$ahead_count" = "0" ]; then
+            echo "has_delta=false" >> "$GITHUB_OUTPUT"
+            echo "No commits ahead of master on integration/upstream-sync; skipping PR operation."
+            exit 0
+          fi
+
+          echo "has_delta=true" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update integration PR
+        if: ${{ hashFiles('.upstream-sync-noop') == '' && steps.remote-delta.outputs.has_delta == 'true' }}
+        env:
+          GH_TOKEN: ${{ env.SYNC_TOKEN }}
+        run: |
+          set -euo pipefail
+          existing_number=$(gh pr list \
+            --base master \
+            --head integration/upstream-sync \
+            --json number \
+            --jq '.[0].number // empty')
+
+          if [ -n "${existing_number:-}" ]; then
+            gh pr edit "$existing_number" --body "$(cat .upstream-sync-summary.md)"
+            echo "Updated PR #$existing_number"
+            exit 0
+          fi
+
+          set +e
+          create_output=$(gh pr create \
+            --base master \
+            --head integration/upstream-sync \
+            --title "chore: upstream sync $(date +%Y-%m-%d)" \
+            --body "$(cat .upstream-sync-summary.md)" 2>&1)
+          create_exit=$?
+          set -e
+
+          if [ "$create_exit" -ne 0 ]; then
+            printf '%s\n' "$create_output" >&2
+            if echo "$create_output" | grep -q "No commits between master and integration/upstream-sync"; then
+              echo "No net upstream integration diff to open as PR; treating as successful no-op."
+              exit 0
+            fi
+            if echo "$create_output" | grep -q "Resource not accessible by integration"; then
+              echo "Set repository secret UPSTREAM_SYNC_GH_TOKEN to a token with pull-request write access." >&2
+            fi
+            exit "$create_exit"
+          fi
+
+          printf '%s\n' "$create_output"

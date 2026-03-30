@@ -135,7 +135,111 @@ When adding endpoints:
 - Use company selection context for company-scoped pages
 - Surface failures clearly; do not silently ignore API errors
 
-## 10. Definition of Done
+## 10. SSH Access
+
+Agents with infrastructure responsibilities may SSH into assigned servers using key-based authentication only.
+
+### Production Change Policy (GitHub-only)
+
+Production hot fixes outside GitHub are forbidden.
+
+Required path for every production change:
+
+1. Commit changes to GitHub
+2. Open/update PR
+3. Required checks pass (`verify`, `policy`)
+4. Merge to `master`
+5. Deploy through GitHub Actions only (no VPS source edits)
+
+Explicitly forbidden for production application changes:
+
+- Direct editing of tracked source files on VPS (e.g. under `/opt/paperclip`)
+- Ad-hoc server patching (`sed -i`, manual file rewrites, quick local hacks)
+- Manual `docker compose build/up` as a deployment mechanism for app updates
+- Any change that cannot be traced to a git commit and CI run
+
+Emergency fixes still follow GitHub flow: commit -> checks -> merge -> workflow deploy.
+
+### Connie VPS
+
+Assigned to agents performing Connie infrastructure tasks (service patching, runtime inspection, archive operations).
+
+Environment variables required (must be set before use; block and escalate if missing):
+
+- `CONNIE_VPS_HOST` — IP or hostname of the Connie VPS
+- `CONNIE_VPS_USER` — SSH login user (typically `root`)
+- `CONNIE_SSH_KEY_PATH` — absolute path to the private key
+- `CONNIE_KNOWN_HOSTS_PATH` — absolute path to the known_hosts file for this server
+
+SSH command pattern:
+
+```bash
+ssh -i "$CONNIE_SSH_KEY_PATH" \
+  -o BatchMode=yes \
+  -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="$CONNIE_KNOWN_HOSTS_PATH" \
+  -o ConnectTimeout=10 \
+  "$CONNIE_VPS_USER@$CONNIE_VPS_HOST"
+```
+
+Validate access before any task that requires it:
+
+```bash
+ssh -i "$CONNIE_SSH_KEY_PATH" \
+  -o BatchMode=yes \
+  -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="$CONNIE_KNOWN_HOSTS_PATH" \
+  -o ConnectTimeout=10 \
+  "$CONNIE_VPS_USER@$CONNIE_VPS_HOST" \
+  "echo SSH_OK && hostname && whoami"
+```
+
+Expected output:
+
+```text
+SSH_OK
+connie-vps
+root
+```
+
+Paste exact stdout/stderr output into the task comment when validating. Do not assume access to any server not listed here.
+
+## 11. Operational Maintenance (Platform / Release)
+
+These are the three CI actions that are **independent of each other** and all manual:
+
+| Action | Command |
+|--------|---------|
+| Deploy app to VPS | `gh workflow run deploy-vultr.yml --repo Viraforge/paperclip --ref master` |
+| Publish canary to npm | `gh workflow run release.yml --repo Viraforge/paperclip --ref master -f channel=canary` |
+| Publish stable to npm | `gh workflow run release.yml --repo Viraforge/paperclip --ref master -f channel=stable` |
+
+Canary also publishes automatically on a nightly schedule (02:00 UTC). No action required unless an on-demand canary is needed.
+
+### Drift check
+
+`deploy-drift-check.yml` runs on a schedule and compares the SHA on `master` with the SHA deployed on the VPS. If they differ, the check fails. **This is expected behavior** — it means `master` has commits that have not been deployed yet. Fix by running `deploy-vultr.yml`. Do not disable or suppress the drift check.
+
+### Lockfile refresh
+
+`pnpm-lock.yaml` must never be committed directly in a PR (`pr-policy` blocks it). The correct path when the lockfile is stale:
+
+1. Trigger: `gh workflow run refresh-lockfile.yml --repo Viraforge/paperclip --ref master`
+2. The workflow pushes updated lockfile to branch `chore/refresh-lockfile` but **cannot create the PR** (GitHub Actions lacks PR creation permission in this repo).
+3. Open the PR manually:
+   ```bash
+   gh pr create --repo Viraforge/paperclip \
+     --head chore/refresh-lockfile --base master \
+     --title "chore(lockfile): refresh pnpm-lock.yaml" \
+     --body "Auto-generated lockfile refresh."
+   ```
+4. Post `ai-review/verdict` status, then merge. The `pr-policy` check has a built-in exception for this branch.
+
+### npm package scope
+
+All packages are scoped `@paperclipai/` and marked `"private": true` to prevent accidental npm publishing. We use the upstream's scope for merge compatibility — packages are consumed only within the monorepo via pnpm workspace protocol, never published to npm.
+
+## 12. Definition of Done
 
 A change is done when all are true:
 

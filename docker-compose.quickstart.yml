@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    init: true
     ports:
       - "${PAPERCLIP_PORT:-3100}:3100"
     environment:
@@ -10,9 +11,21 @@ services:
       PAPERCLIP_HOME: "/paperclip"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      # Optional: Claude Code via OpenRouter (see docs/adapters/claude-local.md). Leave unset if unused.
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      ANTHROPIC_BASE_URL: "${ANTHROPIC_BASE_URL:-}"
+      ANTHROPIC_AUTH_TOKEN: "${ANTHROPIC_AUTH_TOKEN:-}"
+      PAPERCLIP_OPENCODE_COMMAND: "/paperclip/bin/opencode"
+      OPENCODE_CONFIG_CONTENT: "${OPENCODE_CONFIG_CONTENT:-}"
+      ZAI_API_KEY: "${ZAI_API_KEY:-}"
+      MINIMAX_API_KEY: "${MINIMAX_API_KEY:-}"
       PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
       PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
       PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}"
       BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set}"
+      STRIPE_TEST_PUBLISHABLE_KEY: "${STRIPE_TEST_PUBLISHABLE_KEY:-}"
+      STRIPE_TEST_SECRET_KEY: "${STRIPE_TEST_SECRET_KEY:-}"
+      STRIPE_PUBLISHABLE_KEY: "${STRIPE_PUBLISHABLE_KEY:-}"
+      STRIPE_SECRET_KEY: "${STRIPE_SECRET_KEY:-}"
     volumes:
       - "${PAPERCLIP_DATA_DIR:-./data/docker-paperclip}:/paperclip"

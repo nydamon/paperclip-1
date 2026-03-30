@@ -1,4 +1,5 @@
 import type { CreateConfigValues } from "@paperclipai/adapter-utils";
+import { DEFAULT_CLAUDE_LOCAL_SKIP_PERMISSIONS } from "../index.js";
 
 function parseCommaArgs(value: string): string[] {
   return value
@@ -82,7 +83,10 @@ export function buildClaudeLocalConfig(v: CreateConfigValues): Record<string, un
   }
   if (Object.keys(env).length > 0) ac.env = env;
   ac.maxTurnsPerRun = v.maxTurnsPerRun;
-  ac.dangerouslySkipPermissions = v.dangerouslySkipPermissions;
+  ac.dangerouslySkipPermissions =
+    typeof v.dangerouslySkipPermissions === "boolean"
+      ? v.dangerouslySkipPermissions
+      : DEFAULT_CLAUDE_LOCAL_SKIP_PERMISSIONS;
   if (v.workspaceStrategyType === "git_worktree") {
     ac.workspaceStrategy = {
       type: "git_worktree",
