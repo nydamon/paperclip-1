@@ -21,7 +21,17 @@ GitHub Actions owns `pnpm-lock.yaml`.
 
 - Do not commit `pnpm-lock.yaml` in pull requests.
 - Pull request CI validates dependency resolution when manifests change.
-- Pushes to `master` regenerate `pnpm-lock.yaml` with `pnpm install --lockfile-only --no-frozen-lockfile`, commit it back if needed, and then run verification with `--frozen-lockfile`.
+- When manifests change on `master`, [`.github/workflows/refresh-lockfile.yml`](../.github/workflows/refresh-lockfile.yml) opens/updates a lockfile PR (path-filtered; not on every push).
+
+## Release and deploy (CI)
+
+Three separate actions:
+
+1. **Merge PR** — required checks `verify` + `policy` (see [`.github/workflows/pr-verify.yml`](../.github/workflows/pr-verify.yml)).
+2. **Deploy app to VPS** — [`.github/workflows/deploy-vultr.yml`](../.github/workflows/deploy-vultr.yml) (`workflow_dispatch`).
+3. **Publish npm** — [`.github/workflows/release.yml`](../.github/workflows/release.yml) (`workflow_dispatch`, **channel** `canary` or `stable`; canary also runs on a nightly schedule). Requires **`NPM_TOKEN`** in GitHub Environments `npm-canary` and `npm-stable`.
+
+See [doc/RELEASING.md](RELEASING.md) for maintainer steps.
 
 ## Start Dev
 
@@ -38,6 +48,8 @@ This starts:
 - UI: served by the API server in dev middleware mode (same origin as API)
 
 `pnpm dev` runs the server in watch mode and restarts on changes from workspace packages (including adapter packages). Use `pnpm dev:once` to run without file watching.
+
+`pnpm dev:once` now tracks backend-relevant file changes and pending migrations. When the current boot is stale, the board UI shows a `Restart required` banner. You can also enable guarded auto-restart in `Instance Settings > Experimental`, which waits for queued/running local agent runs to finish before restarting the dev server.
 
 Tailscale/private-auth dev mode:
 
@@ -87,7 +99,11 @@ Or use Compose:
 docker compose -f docker-compose.quickstart.yml up --build
 ```
 
-See `doc/DOCKER.md` for API key wiring (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`) and persistence details.
+See `doc/DOCKER.md` for API key wiring (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`), optional Stripe test keys (`STRIPE_TEST_*` / `STRIPE_*`), and persistence details.
+
+## Docker For Untrusted PR Review
+
+For a separate review-oriented container that keeps `codex`/`claude` login state in Docker volumes and checks out PRs into an isolated scratch workspace, see `doc/UNTRUSTED-PR-REVIEW.md`.
 
 ## Database in Dev (Auto-Handled)
 
@@ -123,6 +139,10 @@ When a local agent run has no resolved project/session workspace, Paperclip fall
 - `~/.paperclip/instances/default/workspaces/<agent-id>`
 
 This path honors `PAPERCLIP_HOME` and `PAPERCLIP_INSTANCE_ID` in non-default setups.
+
+For `codex_local`, Paperclip also manages a per-company Codex home under the instance root and seeds it from the shared Codex login/config home (`$CODEX_HOME` or `~/.codex`):
+
+- `~/.paperclip/instances/default/companies/<company-id>/codex-home`
 
 ## Worktree-local Instances
 

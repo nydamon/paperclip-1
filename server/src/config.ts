@@ -1,5 +1,6 @@
 import { readConfigFile } from "./config-file.js";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import { config as loadDotenv } from "dotenv";
 import { resolvePaperclipEnvPath } from "./paths.js";
 import {
@@ -21,13 +22,56 @@ import {
   resolveDefaultStorageDir,
   resolveHomeAwarePath,
 } from "./home-paths.js";
+import { resolveStripeKeysFromProcessEnv, syncStripeStandardEnvFromResolved } from "./stripe-env.js";
 
 const PAPERCLIP_ENV_FILE_PATH = resolvePaperclipEnvPath();
 if (existsSync(PAPERCLIP_ENV_FILE_PATH)) {
   loadDotenv({ path: PAPERCLIP_ENV_FILE_PATH, override: false, quiet: true });
 }
 
+const CWD_ENV_PATH = resolve(process.cwd(), ".env");
+const isSameFile = existsSync(CWD_ENV_PATH) && existsSync(PAPERCLIP_ENV_FILE_PATH)
+  ? realpathSync(CWD_ENV_PATH) === realpathSync(PAPERCLIP_ENV_FILE_PATH)
+  : CWD_ENV_PATH === PAPERCLIP_ENV_FILE_PATH;
+if (!isSameFile && existsSync(CWD_ENV_PATH)) {
+  loadDotenv({ path: CWD_ENV_PATH, override: false, quiet: true });
+}
+
 type DatabaseMode = "embedded-postgres" | "postgres";
+
+/**
+ * Union of persisted config, `PAPERCLIP_ALLOWED_HOSTNAMES`, and `PAPERCLIP_PUBLIC_URL` hostname.
+ * Previously, a non-empty env CSV replaced the file list entirely, so `paperclipai allowed-hostname`
+ * (and onboard defaults) could be ignored and lost effective hosts after env drift or redeploys.
+ */
+export function mergeAllowedHostnamesForConfig(input: {
+  fileAllowed: string[] | undefined | null;
+  envCsv: string | undefined | null;
+  publicBaseUrl: string | undefined | null;
+}): string[] {
+  const fromFile = (input.fileAllowed ?? [])
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => value.length > 0);
+  const rawEnv = input.envCsv;
+  const fromEnv =
+    rawEnv === undefined || rawEnv === null
+      ? []
+      : rawEnv
+          .split(",")
+          .map((value) => value.trim().toLowerCase())
+          .filter((value) => value.length > 0);
+  let fromPublic: string[] = [];
+  const base = input.publicBaseUrl?.trim();
+  if (base) {
+    try {
+      const hostname = new URL(base).hostname.trim().toLowerCase();
+      if (hostname) fromPublic = [hostname];
+    } catch {
+      /* invalid URL */
+    }
+  }
+  return Array.from(new Set([...fromFile, ...fromEnv, ...fromPublic]));
+}
 
 export interface Config {
   deploymentMode: DeploymentMode;
@@ -61,6 +105,9 @@ export interface Config {
   heartbeatSchedulerEnabled: boolean;
   heartbeatSchedulerIntervalMs: number;
   companyDeletionEnabled: boolean;
+  /** Resolved from `STRIPE_TEST_*` then `STRIPE_*`; use for future billing routes (never log). */
+  stripePublishableKey: string | undefined;
+  stripeSecretKey: string | undefined;
 }
 
 export function loadConfig(): Config {
@@ -148,32 +195,11 @@ export function loadConfig(): Config {
     disableSignUpFromEnv !== undefined
       ? disableSignUpFromEnv === "true"
       : (fileConfig?.auth?.disableSignUp ?? false);
-  const allowedHostnamesFromEnvRaw = process.env.PAPERCLIP_ALLOWED_HOSTNAMES;
-  const allowedHostnamesFromEnv = allowedHostnamesFromEnvRaw
-    ? allowedHostnamesFromEnvRaw
-      .split(",")
-      .map((value) => value.trim().toLowerCase())
-      .filter((value) => value.length > 0)
-    : null;
-  const publicUrlHostname = authPublicBaseUrl
-    ? (() => {
-      try {
-        return new URL(authPublicBaseUrl).hostname.trim().toLowerCase();
-      } catch {
-        return null;
-      }
-    })()
-    : null;
-  const allowedHostnames = Array.from(
-    new Set(
-      [
-        ...(allowedHostnamesFromEnv ?? fileConfig?.server.allowedHostnames ?? []),
-        ...(publicUrlHostname ? [publicUrlHostname] : []),
-      ]
-        .map((value) => value.trim().toLowerCase())
-        .filter(Boolean),
-    ),
-  );
+  const allowedHostnames = mergeAllowedHostnamesForConfig({
+    fileAllowed: fileConfig?.server.allowedHostnames,
+    envCsv: process.env.PAPERCLIP_ALLOWED_HOSTNAMES,
+    publicBaseUrl: authPublicBaseUrl,
+  });
   const companyDeletionEnvRaw = process.env.PAPERCLIP_ENABLE_COMPANY_DELETION;
   const companyDeletionEnabled =
     companyDeletionEnvRaw !== undefined
@@ -200,6 +226,9 @@ export function loadConfig(): Config {
       fileDatabaseBackup?.dir ??
       resolveDefaultBackupDir(),
   );
+
+  const stripeKeys = resolveStripeKeysFromProcessEnv(process.env);
+  syncStripeStandardEnvFromResolved(process.env, stripeKeys);
 
   return {
     deploymentMode,
@@ -243,5 +272,7 @@ export function loadConfig(): Config {
     heartbeatSchedulerEnabled: process.env.HEARTBEAT_SCHEDULER_ENABLED !== "false",
     heartbeatSchedulerIntervalMs: Math.max(10000, Number(process.env.HEARTBEAT_SCHEDULER_INTERVAL_MS) || 30000),
     companyDeletionEnabled,
+    stripePublishableKey: stripeKeys.publishableKey,
+    stripeSecretKey: stripeKeys.secretKey,
   };
 }

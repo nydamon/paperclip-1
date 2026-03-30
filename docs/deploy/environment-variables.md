@@ -48,3 +48,8 @@ These are set automatically by the server when invoking agents:
 |----------|-------------|
 | `ANTHROPIC_API_KEY` | Anthropic API key (for Claude Local adapter) |
 | `OPENAI_API_KEY` | OpenAI API key (for Codex Local adapter) |
+| `OPENROUTER_API_KEY` | OpenRouter key when routing Claude Code through OpenRouter (often set on the agent instead of globally) |
+| `ANTHROPIC_BASE_URL` | When using OpenRouter with Claude Code, typically `https://openrouter.ai/api` |
+| `ANTHROPIC_AUTH_TOKEN` | With OpenRouter, usually the same value as `OPENROUTER_API_KEY`; keep `ANTHROPIC_API_KEY` empty |
+
+See [Claude Local adapter — OpenRouter](../adapters/claude-local.md#openrouter-claude-code-compatible-api).
