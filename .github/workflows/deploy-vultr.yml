@@ -184,6 +184,15 @@ jobs:
               -f '$VULTR_RELEASE_DIR/docker-compose.vps.yml' \
               up -d --force-recreate --no-deps server edge"
 
+      - name: Capture restart forensics snapshot
+        run: |
+          set -euo pipefail
+          ssh -F "$HOME/.ssh/config" \
+            vultr-deploy \
+            "set -euo pipefail
+            FORENSICS_ROOT=/opt/paperclip/forensics \
+            '$VULTR_RELEASE_DIR/scripts/capture-restart-forensics.sh'"
+
       - name: Assert image revision provenance
         run: |
           set -euo pipefail

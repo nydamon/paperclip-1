@@ -76,5 +76,23 @@ curl -fsS --max-time 10 http://localhost:3100/api/health > /dev/null || {
   exit 1
 }
 
+if [ -n "${current_release:-}" ] && [ -x "$current_release/scripts/check-heartbeat-stalls.sh" ]; then
+  set +e
+  FORENSICS_ROOT=/opt/paperclip/forensics \
+    "$current_release/scripts/check-heartbeat-stalls.sh"
+  stall_exit="$?"
+  set -e
+  if [ "$stall_exit" -eq 2 ]; then
+    echo "ALERT: heartbeat stall threshold exceeded (see /opt/paperclip/forensics/alerts)." >&2
+    exit 1
+  fi
+  if [ "$stall_exit" -ne 0 ]; then
+    echo "DRIFT: heartbeat stall check failed unexpectedly (exit $stall_exit)." >&2
+    exit 1
+  fi
+else
+  echo "WARN: heartbeat stall check script unavailable on current release."
+fi
+
 echo "DRIFT_CHECK=PASS"
 EOF
