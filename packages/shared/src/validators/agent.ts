@@ -125,3 +125,16 @@ export const updateAgentPermissionsSchema = z.object({
 });
 
 export type UpdateAgentPermissions = z.infer<typeof updateAgentPermissionsSchema>;
+
+export const managerRecoveryActionSchema = z.object({
+  reason: z.string().optional().nullable(),
+});
+
+export type ManagerRecoveryAction = z.infer<typeof managerRecoveryActionSchema>;
+
+export const managerRollbackConfigSchema = z.object({
+  revisionId: z.string().uuid(),
+  reason: z.string().optional().nullable(),
+});
+
+export type ManagerRollbackConfig = z.infer<typeof managerRollbackConfigSchema>;
