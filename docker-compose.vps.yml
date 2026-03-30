@@ -46,8 +46,12 @@ services:
       STRIPE_TEST_SECRET_KEY: "${STRIPE_TEST_SECRET_KEY:-}"
       STRIPE_PUBLISHABLE_KEY: "${STRIPE_PUBLISHABLE_KEY:-}"
       STRIPE_SECRET_KEY: "${STRIPE_SECRET_KEY:-}"
+    # gid 999 = docker group on host, needed for hermes-bridge.sh to docker-exec into hermes-agent container.
+    group_add:
+      - "999"
     volumes:
       - paperclip-data:/paperclip
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     depends_on:
       db:
         condition: service_healthy
