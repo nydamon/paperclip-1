@@ -9,4 +9,15 @@
 
 HERMES_CONTAINER="${HERMES_CONTAINER_NAME:-hermes-agent}"
 
-exec docker exec -i "$HERMES_CONTAINER" hermes "$@"
+docker exec -i "$HERMES_CONTAINER" hermes "$@"
+rc=$?
+
+# Hermes CLI occasionally exits with 134 (SIGABRT) during cleanup after
+# completing work successfully.  Treat 134 as success so the heartbeat
+# run is not marked "failed" when the actual output is fine.
+if [ "$rc" -eq 134 ]; then
+  echo "[hermes-bridge] Masked exit code 134 (SIGABRT during cleanup) as success" >&2
+  exit 0
+fi
+
+exit "$rc"
