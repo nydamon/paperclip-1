@@ -186,6 +186,39 @@ The deployment validates:
    - `PAPERCLIP_PUBLIC_URL` (non-localhost)
 5. **Startup logs** - No fatal errors, success signal present
 
+## Restart Forensics And Heartbeat-Stall Alerting
+
+To preserve restart RCA evidence and avoid losing root-cause context after redeploys:
+
+- Deploy now captures a restart-forensics snapshot automatically using `scripts/capture-restart-forensics.sh`
+- Snapshots are stored under `/opt/paperclip/forensics/restarts/<timestamp>/`
+- Each snapshot contains:
+  - `summary.json` (container state, restart count, OOM flag, inferred restart reason)
+  - `events.jsonl` (recent Docker lifecycle events)
+  - `server.log` (timestamped server logs)
+- Retention is enforced at 7 days by default (`RETENTION_DAYS=7`)
+
+Drift-check now includes heartbeat-stall detection:
+
+- Script: `scripts/check-heartbeat-stalls.sh`
+- Threshold: running agents with heartbeat older than 15 minutes (`STALL_MINUTES=15`)
+- On alert:
+  - exits non-zero so CI surfaces it
+  - writes alert evidence to `/opt/paperclip/forensics/alerts/heartbeat-stall-<timestamp>.md`
+  - links the stale-agent list with the latest restart-forensics capture path
+
+Manual invocation on VPS:
+
+```bash
+if [ -f /opt/paperclip/current-release ]; then
+  CURRENT_RELEASE=$(cat /opt/paperclip/current-release)
+  FORENSICS_ROOT=/opt/paperclip/forensics \
+    "$CURRENT_RELEASE/scripts/capture-restart-forensics.sh"
+  FORENSICS_ROOT=/opt/paperclip/forensics \
+    "$CURRENT_RELEASE/scripts/check-heartbeat-stalls.sh"
+fi
+```
+
 ## Recovery Procedures
 
 **Policy:** Never edit source files directly on the VPS. All changes must be committed, reviewed, pass required checks, and be deployed through CI.
