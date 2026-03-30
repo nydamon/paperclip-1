@@ -90,6 +90,8 @@ export {
   testAdapterEnvironmentSchema,
   agentPermissionsSchema,
   updateAgentPermissionsSchema,
+  managerRecoveryActionSchema,
+  managerRollbackConfigSchema,
   type CreateAgent,
   type CreateAgentHire,
   type UpdateAgent,
@@ -101,6 +103,8 @@ export {
   type ResetAgentSession,
   type TestAdapterEnvironment,
   type UpdateAgentPermissions,
+  type ManagerRecoveryAction,
+  type ManagerRollbackConfig,
 } from "./agent.js";
 
 export {
