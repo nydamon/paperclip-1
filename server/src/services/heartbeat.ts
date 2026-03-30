@@ -61,10 +61,6 @@ import {
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const HEARTBEAT_MAX_CONCURRENT_RUNS_DEFAULT = 1;
 const HEARTBEAT_MAX_CONCURRENT_RUNS_MAX = 10;
-const HEARTBEAT_GLOBAL_MAX_CONCURRENT_RUNS = Math.max(
-  1,
-  Number(process.env.HEARTBEAT_GLOBAL_MAX_CONCURRENT_RUNS) || 3,
-);
 const DEFERRED_WAKE_CONTEXT_KEY = "_paperclipWakeContext";
 const DETACHED_PROCESS_ERROR_CODE = "process_detached";
 const startLocksByAgent = new Map<string, Promise<void>>();
@@ -1952,16 +1948,6 @@ export function heartbeatService(db: Db) {
   }
 
   async function executeRun(runId: string) {
-    // Global concurrency gate — check BEFORE claiming so deferred runs stay
-    // in "queued" status rather than leaking to "running" with no process.
-    if (activeRunExecutions.size >= HEARTBEAT_GLOBAL_MAX_CONCURRENT_RUNS) {
-      logger.info(
-        { runId, active: activeRunExecutions.size, limit: HEARTBEAT_GLOBAL_MAX_CONCURRENT_RUNS },
-        "global concurrent run limit reached — deferring run",
-      );
-      return;
-    }
-
     let run = await getRun(runId);
     if (!run) return;
     if (run.status !== "queued" && run.status !== "running") return;
