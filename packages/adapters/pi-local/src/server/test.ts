@@ -52,6 +52,8 @@ function normalizeEnv(input: unknown): Record<string, string> {
 const PI_AUTH_REQUIRED_RE =
   /(?:auth(?:entication)?\s+required|api\s*key|invalid\s*api\s*key|not\s+logged\s+in|free\s+usage\s+exceeded)/i;
 const PI_STALE_PACKAGE_RE = /pi-driver|npm:\s*pi-driver/i;
+const PI_DISCOVERY_RUNTIME_RE = /classification=runtime_availability/i;
+const PI_DISCOVERY_CONFIG_RE = /classification=config_or_infra/i;
 
 function buildPiModelDiscoveryFailureCheck(message: string): AdapterEnvironmentCheck {
   if (PI_STALE_PACKAGE_RE.test(message)) {
@@ -61,6 +63,26 @@ function buildPiModelDiscoveryFailureCheck(message: string): AdapterEnvironmentC
       message: "Pi startup failed while installing configured package `npm:pi-driver`.",
       detail: message,
       hint: "Remove `npm:pi-driver` from ~/.pi/agent/settings.json or set adapter env HOME to a clean Pi profile, then retry `pi --list-models`.",
+    };
+  }
+
+  if (PI_DISCOVERY_RUNTIME_RE.test(message)) {
+    return {
+      code: "pi_models_runtime_unavailable",
+      level: "warn",
+      message: "Pi model discovery is temporarily unavailable (runtime latency/timeout).",
+      detail: message,
+      hint: "Retry shortly. If this persists, run `pi --list-models` manually to verify runtime health.",
+    };
+  }
+
+  if (PI_DISCOVERY_CONFIG_RE.test(message)) {
+    return {
+      code: "pi_models_config_or_infra_failed",
+      level: "error",
+      message: "Pi model discovery failed due to configuration or infrastructure error.",
+      detail: message,
+      hint: "Run `pi --list-models` manually and resolve command/config/auth failures.",
     };
   }
 

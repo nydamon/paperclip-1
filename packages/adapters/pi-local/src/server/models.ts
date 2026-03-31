@@ -3,6 +3,20 @@ import type { AdapterModel } from "@paperclipai/adapter-utils";
 import { asString, runChildProcess } from "@paperclipai/adapter-utils/server-utils";
 
 const MODELS_CACHE_TTL_MS = 60_000;
+const DEFAULT_LIST_MODELS_TIMEOUT_SEC = 20;
+const DEFAULT_LIST_MODELS_GRACE_SEC = 3;
+
+type DiscoveryFailureClassification = "config_or_infra" | "runtime_availability";
+
+class PiModelDiscoveryError extends Error {
+  readonly classification: DiscoveryFailureClassification;
+
+  constructor(message: string, classification: DiscoveryFailureClassification) {
+    super(message);
+    this.name = "PiModelDiscoveryError";
+    this.classification = classification;
+  }
+}
 
 function firstNonEmptyLine(text: string): string {
   return (
@@ -11,6 +25,12 @@ function firstNonEmptyLine(text: string): string {
       .map((line) => line.trim())
       .find(Boolean) ?? ""
   );
+}
+
+function excerpt(text: string, max = 160): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) return "(empty)";
+  return normalized.length > max ? `${normalized.slice(0, max - 3)}...` : normalized;
 }
 
 function parseModelsOutput(stdout: string): AdapterModel[] {
@@ -73,6 +93,7 @@ function resolvePiCommand(input: unknown): string {
 }
 
 const discoveryCache = new Map<string, { expiresAt: number; models: AdapterModel[] }>();
+const staleDiscoveryCache = new Map<string, { observedAt: number; models: AdapterModel[] }>();
 const VOLATILE_ENV_KEY_PREFIXES = ["PAPERCLIP_", "npm_", "NPM_"] as const;
 const VOLATILE_ENV_KEY_EXACT = new Set(["PWD", "OLDPWD", "SHLVL", "_", "TERM_SESSION_ID"]);
 
@@ -110,6 +131,11 @@ export async function discoverPiModels(input: {
   const env = normalizeEnv(input.env);
   const runtimeEnv = normalizeEnv({ ...process.env, ...env });
 
+  const configuredTimeoutSec = Number(process.env.PAPERCLIP_PI_LIST_MODELS_TIMEOUT_SEC);
+  const timeoutSec =
+    Number.isFinite(configuredTimeoutSec) && configuredTimeoutSec > 0
+      ? configuredTimeoutSec
+      : DEFAULT_LIST_MODELS_TIMEOUT_SEC;
   const result = await runChildProcess(
     `pi-models-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     command,
@@ -117,18 +143,26 @@ export async function discoverPiModels(input: {
     {
       cwd,
       env: runtimeEnv,
-      timeoutSec: 20,
-      graceSec: 3,
+      timeoutSec,
+      graceSec: DEFAULT_LIST_MODELS_GRACE_SEC,
       onLog: async () => {},
     },
   );
 
   if (result.timedOut) {
-    throw new Error("`pi --list-models` timed out.");
+    throw new PiModelDiscoveryError(
+      `Pi model discovery failed (classification=runtime_availability): \`pi --list-models\` timed out after ${timeoutSec}s. ` +
+        `stderr_excerpt=${excerpt(result.stderr)} stdout_excerpt=${excerpt(result.stdout)}`,
+      "runtime_availability",
+    );
   }
   if ((result.exitCode ?? 1) !== 0) {
-    const detail = firstNonEmptyLine(result.stderr) || firstNonEmptyLine(result.stdout);
-    throw new Error(detail ? `\`pi --list-models\` failed: ${detail}` : "`pi --list-models` failed.");
+    const detail = firstNonEmptyLine(result.stderr) || firstNonEmptyLine(result.stdout) || "unknown";
+    throw new PiModelDiscoveryError(
+      `Pi model discovery failed (classification=config_or_infra): \`pi --list-models\` exited with code ${result.exitCode ?? 1}. ` +
+        `detail=${detail} stderr_excerpt=${excerpt(result.stderr)} stdout_excerpt=${excerpt(result.stdout)}`,
+      "config_or_infra",
+    );
   }
 
   return sortModels(dedupeModels(parseModelsOutput(result.stdout)));
@@ -159,9 +193,23 @@ export async function discoverPiModelsCached(input: {
   const cached = discoveryCache.get(key);
   if (cached && cached.expiresAt > now) return cached.models;
 
-  const models = await discoverPiModels({ command, cwd, env });
-  discoveryCache.set(key, { expiresAt: now + MODELS_CACHE_TTL_MS, models });
-  return models;
+  try {
+    const models = await discoverPiModels({ command, cwd, env });
+    discoveryCache.set(key, { expiresAt: now + MODELS_CACHE_TTL_MS, models });
+    staleDiscoveryCache.set(key, { observedAt: now, models });
+    return models;
+  } catch (err) {
+    const stale = staleDiscoveryCache.get(key);
+    if (
+      err instanceof PiModelDiscoveryError &&
+      err.classification === "runtime_availability" &&
+      stale &&
+      stale.models.length > 0
+    ) {
+      return stale.models;
+    }
+    throw err;
+  }
 }
 
 export async function ensurePiModelConfiguredAndAvailable(input: {
@@ -205,4 +253,5 @@ export async function listPiModels(): Promise<AdapterModel[]> {
 
 export function resetPiModelsCacheForTests() {
   discoveryCache.clear();
+  staleDiscoveryCache.clear();
 }
