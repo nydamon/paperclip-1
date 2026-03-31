@@ -552,6 +552,25 @@ export function issueService(db: Db) {
     return adopted;
   }
 
+  async function clearTerminalExecutionLock(issueId: string, executionRunId: string) {
+    const stale = await isTerminalOrMissingHeartbeatRun(executionRunId);
+    if (!stale) return false;
+
+    const cleared = await db
+      .update(issues)
+      .set({
+        executionRunId: null,
+        executionAgentNameKey: null,
+        executionLockedAt: null,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(issues.id, issueId), eq(issues.executionRunId, executionRunId)))
+      .returning({ id: issues.id })
+      .then((rows) => rows[0] ?? null);
+
+    return Boolean(cleared);
+  }
+
   return {
     list: async (companyId: string, filters?: IssueFilters) => {
       const conditions = [eq(issues.companyId, companyId)];
@@ -944,12 +963,18 @@ export function issueService(db: Db) {
       }
       if (issueData.status && issueData.status !== "in_progress") {
         patch.checkoutRunId = null;
+        patch.executionRunId = null;
+        patch.executionAgentNameKey = null;
+        patch.executionLockedAt = null;
       }
       if (
         (issueData.assigneeAgentId !== undefined && issueData.assigneeAgentId !== existing.assigneeAgentId) ||
         (issueData.assigneeUserId !== undefined && issueData.assigneeUserId !== existing.assigneeUserId)
       ) {
         patch.checkoutRunId = null;
+        patch.executionRunId = null;
+        patch.executionAgentNameKey = null;
+        patch.executionLockedAt = null;
       }
 
       return db.transaction(async (tx) => {
@@ -1020,7 +1045,13 @@ export function issueService(db: Db) {
         return enriched;
       }),
 
-    checkout: async (id: string, agentId: string, expectedStatuses: string[], checkoutRunId: string | null) => {
+    checkout: async (
+      id: string,
+      agentId: string,
+      expectedStatuses: string[],
+      checkoutRunId: string | null,
+      opts?: { allowMentionTakeover?: boolean },
+    ) => {
       const issueCompany = await db
         .select({ companyId: issues.companyId })
         .from(issues)
@@ -1029,6 +1060,20 @@ export function issueService(db: Db) {
       if (!issueCompany) throw notFound("Issue not found");
       await assertAssignableAgent(issueCompany.companyId, agentId);
 
+      const existingLock = await db
+        .select({
+          executionRunId: issues.executionRunId,
+        })
+        .from(issues)
+        .where(eq(issues.id, id))
+        .then((rows) => rows[0] ?? null);
+      if (
+        existingLock?.executionRunId &&
+        existingLock.executionRunId !== checkoutRunId
+      ) {
+        await clearTerminalExecutionLock(id, existingLock.executionRunId);
+      }
+
       const now = new Date();
       const sameRunAssigneeCondition = checkoutRunId
         ? and(
@@ -1036,9 +1081,14 @@ export function issueService(db: Db) {
           or(isNull(issues.checkoutRunId), eq(issues.checkoutRunId, checkoutRunId)),
         )
         : and(eq(issues.assigneeAgentId, agentId), isNull(issues.checkoutRunId));
+      const allowMentionTakeover = opts?.allowMentionTakeover === true;
+      const assigneeAvailabilityCondition = allowMentionTakeover
+        ? sql`true`
+        : or(isNull(issues.assigneeAgentId), sameRunAssigneeCondition);
       const executionLockCondition = checkoutRunId
         ? or(isNull(issues.executionRunId), eq(issues.executionRunId, checkoutRunId))
         : isNull(issues.executionRunId);
+      const executionAvailabilityCondition = allowMentionTakeover ? sql`true` : executionLockCondition;
       const updated = await db
         .update(issues)
         .set({
@@ -1054,8 +1104,8 @@ export function issueService(db: Db) {
           and(
             eq(issues.id, id),
             inArray(issues.status, expectedStatuses),
-            or(isNull(issues.assigneeAgentId), sameRunAssigneeCondition),
-            executionLockCondition,
+            assigneeAvailabilityCondition,
+            executionAvailabilityCondition,
           ),
         )
         .returning()
@@ -1325,6 +1375,32 @@ export function issueService(db: Db) {
       const comments = limit ? await query.limit(limit) : await query;
       const { censorUsernameInLogs } = await instanceSettings.getGeneral();
       return comments.map((comment) => redactIssueComment(comment, censorUsernameInLogs));
+    },
+
+    getPreviousAgentAssigneeFromActivity: async (issueId: string) => {
+      const rows = await db
+        .select({ details: activityLog.details })
+        .from(activityLog)
+        .where(
+          and(
+            eq(activityLog.entityType, "issue"),
+            eq(activityLog.entityId, issueId),
+            eq(activityLog.action, "issue.updated"),
+          ),
+        )
+        .orderBy(desc(activityLog.createdAt), desc(activityLog.id))
+        .limit(20);
+
+      for (const row of rows) {
+        const previous = row.details?._previous;
+        if (!previous || typeof previous !== "object") continue;
+        const assigneeAgentId = (previous as Record<string, unknown>).assigneeAgentId;
+        if (typeof assigneeAgentId === "string" && assigneeAgentId.trim().length > 0) {
+          return assigneeAgentId.trim();
+        }
+      }
+
+      return null;
     },
 
     getCommentCursor: async (issueId: string) => {

@@ -4,6 +4,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { eq } from "drizzle-orm";
 import {
   activityLog,
   agents,
@@ -11,6 +12,7 @@ import {
   companies,
   createDb,
   ensurePostgresDatabase,
+  heartbeatRuns,
   issueComments,
   issues,
 } from "@paperclipai/db";
@@ -100,6 +102,7 @@ describe("issueService.list participantAgentId", () => {
     await db.delete(issueComments);
     await db.delete(activityLog);
     await db.delete(issues);
+    await db.delete(heartbeatRuns);
     await db.delete(agents);
     await db.delete(companies);
   });
@@ -322,5 +325,140 @@ describe("issueService.list participantAgentId", () => {
         status: "in_review",
       }),
     ).rejects.toThrow("in_review issues require a reviewer assignee");
+  });
+
+  it("allows checkout when only a terminal execution run lock is left behind", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const staleRunId = randomUUID();
+    const newRunId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "CodexCoder",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+
+    await db.insert(heartbeatRuns).values({
+      id: staleRunId,
+      companyId,
+      agentId,
+      invocationSource: "assignment",
+      status: "failed",
+    });
+    await db.insert(heartbeatRuns).values({
+      id: newRunId,
+      companyId,
+      agentId,
+      invocationSource: "assignment",
+      status: "running",
+    });
+
+    const created = await svc.create(companyId, {
+      title: "Recover stale execution lock",
+      status: "blocked",
+      priority: "medium",
+      assigneeAgentId: agentId,
+    });
+
+    await db
+      .update(issues)
+      .set({
+        checkoutRunId: null,
+        executionRunId: staleRunId,
+        executionLockedAt: new Date("2026-03-30T21:00:00.000Z"),
+      })
+      .where(eq(issues.id, created.id));
+
+    const checkedOut = await svc.checkout(created.id, agentId, ["todo", "backlog", "blocked"], newRunId);
+
+    expect(checkedOut.status).toBe("in_progress");
+    expect(checkedOut.checkoutRunId).toBe(newRunId);
+    expect(checkedOut.executionRunId).toBe(newRunId);
+  });
+
+  it("clears execution run locks when routing an issue away from in_progress", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const qaAgentId = randomUUID();
+    const runId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(agents).values([
+      {
+        id: agentId,
+        companyId,
+        name: "Engineer",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      },
+      {
+        id: qaAgentId,
+        companyId,
+        name: "QA Agent",
+        role: "qa",
+        status: "active",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: {},
+        permissions: {},
+      },
+    ]);
+
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      invocationSource: "assignment",
+      status: "running",
+    });
+
+    const created = await svc.create(companyId, {
+      title: "Route to QA",
+      status: "in_progress",
+      priority: "medium",
+      assigneeAgentId: agentId,
+    });
+
+    await db
+      .update(issues)
+      .set({
+        checkoutRunId: runId,
+        executionRunId: runId,
+        executionLockedAt: new Date("2026-03-30T21:10:00.000Z"),
+      })
+      .where(eq(issues.id, created.id));
+
+    const updated = await svc.update(created.id, {
+      status: "in_review",
+      assigneeAgentId: qaAgentId,
+    });
+
+    expect(updated?.checkoutRunId).toBeNull();
+    expect(updated?.executionRunId).toBeNull();
+    expect(updated?.executionLockedAt).toBeNull();
   });
 });
