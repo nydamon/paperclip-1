@@ -2,6 +2,7 @@ import { and, eq, gte, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agents, approvals, companies, costEvents, issues } from "@paperclipai/db";
 import { notFound } from "../errors.js";
+import { summarizeRecoverableDispatchGaps } from "./dispatch-gaps.js";
 
 export function dashboardService(db: Db) {
   return {
@@ -78,6 +79,7 @@ export function dashboardService(db: Db) {
         company.budgetMonthlyCents > 0
           ? (monthSpendCents / company.budgetMonthlyCents) * 100
           : 0;
+      const dispatch = await summarizeRecoverableDispatchGaps(db, companyId);
 
       return {
         companyId,
@@ -94,6 +96,7 @@ export function dashboardService(db: Db) {
           monthUtilizationPercent: Number(utilization.toFixed(2)),
         },
         pendingApprovals,
+        dispatch,
       };
     },
   };

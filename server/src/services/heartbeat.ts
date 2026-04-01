@@ -33,6 +33,7 @@ import {
   releaseRuntimeServicesForRun,
 } from "./workspace-runtime.js";
 import { issueService } from "./issues.js";
+import { listRecoverableDispatchGaps } from "./dispatch-gaps.js";
 import {
   buildExecutionWorkspaceAdapterConfig,
   parseIssueExecutionWorkspaceSettings,
@@ -2820,6 +2821,84 @@ export function heartbeatService(db: Db) {
           contextSnapshot: {
             source: "scheduler",
             reason: "interval_elapsed",
+            now: now.toISOString(),
+          },
+        });
+        if (run) enqueued += 1;
+        else skipped += 1;
+      }
+
+      const recoverableGaps = await listRecoverableDispatchGaps(db);
+      for (const gap of recoverableGaps) {
+        const assigneeNonDispatchable = gap.assigneeStatus !== "idle";
+        const shouldEscalateActivationFailure =
+          gap.issueStatus === "in_progress" || gap.issueStatus === "in_review";
+
+        if (shouldEscalateActivationFailure) {
+          if (assigneeNonDispatchable) {
+            const blockedIssue = await issuesSvc.update(gap.issueId, { status: "blocked" });
+            if (blockedIssue) {
+              await issuesSvc.addComment(
+                gap.issueId,
+                [
+                  "## Activation Failure Escalation",
+                  "",
+                  "- reason_class: `activation_failure_non_dispatchable_assignee`",
+                  `- assignee_status: \`${gap.assigneeStatus}\``,
+                  "- action: issue moved to `blocked` for explicit owner intervention",
+                ].join("\n"),
+                {},
+              );
+            }
+            skipped += 1;
+            continue;
+          }
+
+          const priorRecoveryAttempts = await db
+            .select({ count: sql<number>`count(*)` })
+            .from(agentWakeupRequests)
+            .where(
+              and(
+                eq(agentWakeupRequests.companyId, gap.companyId),
+                eq(agentWakeupRequests.agentId, gap.assigneeAgentId),
+                eq(agentWakeupRequests.reason, "idle_issue_dispatch_gap"),
+                sql`${agentWakeupRequests.payload} ->> 'issueId' = ${gap.issueId}`,
+              ),
+            )
+            .then((rows) => Number(rows[0]?.count ?? 0));
+
+          if (priorRecoveryAttempts >= 1) {
+            const blockedIssue = await issuesSvc.update(gap.issueId, { status: "blocked" });
+            if (blockedIssue) {
+              await issuesSvc.addComment(
+                gap.issueId,
+                [
+                  "## Activation Failure Escalation",
+                  "",
+                  "- reason_class: `activation_failure_idle_dispatch_gap`",
+                  "- policy: `bounded_same_owner_retry_exhausted`",
+                  "- auto_recovery_attempts: 1",
+                  "- action: issue moved to `blocked` for explicit owner intervention",
+                ].join("\n"),
+                {},
+              );
+            }
+            skipped += 1;
+            continue;
+          }
+        }
+
+        const run = await enqueueWakeup(gap.assigneeAgentId, {
+          source: "timer",
+          triggerDetail: "system",
+          reason: "idle_issue_dispatch_gap",
+          payload: { issueId: gap.issueId },
+          requestedByActorType: "system",
+          requestedByActorId: "heartbeat_scheduler",
+          contextSnapshot: {
+            issueId: gap.issueId,
+            source: "scheduler",
+            reason: "idle_issue_dispatch_gap",
             now: now.toISOString(),
           },
         });
