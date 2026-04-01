@@ -91,6 +91,9 @@ const nonCodeIssue = {
   executionWorkspaceId: null,
 };
 
+/** Provide a valid PR so the delivery gate passes — QA gate tests focus on the QA layer. */
+const validPR = { type: "pull_request" as const, status: "merged" };
+
 function createAgentApp() {
   const app = express();
   app.use(express.json());
@@ -126,7 +129,7 @@ function createBoardApp() {
   return app;
 }
 
-describe("delivery gate", () => {
+describe("qa gate", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockIssueService.assertCheckoutOwner.mockResolvedValue({ adoptedFromRunId: null });
@@ -135,33 +138,42 @@ describe("delivery gate", () => {
       latestCommentId: null,
       latestCommentAt: null,
     });
-    // Provide a QA pass comment by default so delivery gate tests that reach done → 200 pass the QA gate
+    // Default: delivery gate passes (valid PR exists)
+    mockWorkProductService.listForIssue.mockResolvedValue([validPR]);
+  });
+
+  it("agent → done, no comments → 422", async () => {
+    mockIssueService.getById.mockResolvedValue(codeIssue);
+    mockIssueService.listComments.mockResolvedValue([]);
+
+    const app = createAgentApp();
+    const res = await request(app)
+      .patch(`/api/issues/${codeIssue.id}`)
+      .send({ status: "done" });
+
+    expect(res.status).toBe(422);
+    expect(res.body.gate).toBe("done_requires_qa_pass");
+  });
+
+  it("agent → done, QA pass comment with agent author → 200", async () => {
+    mockIssueService.getById.mockResolvedValue(codeIssue);
+    mockIssueService.update.mockResolvedValue({ ...codeIssue, status: "done" });
     mockIssueService.listComments.mockResolvedValue([
-      { body: "QA: PASS", authorAgentId: "qa-agent-1", authorUserId: null },
+      { body: "QA: PASS — looks good", authorAgentId: "qa-agent-1", authorUserId: null },
     ]);
-  });
-
-  it("agent → in_review on code issue with no work products → 422", async () => {
-    mockIssueService.getById.mockResolvedValue(codeIssue);
-    mockWorkProductService.listForIssue.mockResolvedValue([]);
 
     const app = createAgentApp();
     const res = await request(app)
       .patch(`/api/issues/${codeIssue.id}`)
-      .send({ status: "in_review" });
+      .send({ status: "done" });
 
-    expect(res.status).toBe(422);
-    expect(res.body.gate).toBe("in_review_requires_artifact");
-    expect(mockLogActivity).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ action: "issue.delivery_gate_blocked" }),
-    );
+    expect(res.status).toBe(200);
   });
 
-  it("agent → done on code issue with no PR → 422", async () => {
+  it("agent → done, ghost QA pass (null author) → 422", async () => {
     mockIssueService.getById.mockResolvedValue(codeIssue);
-    mockWorkProductService.listForIssue.mockResolvedValue([
-      { type: "branch", status: "active" },
+    mockIssueService.listComments.mockResolvedValue([
+      { body: "QA: PASS", authorAgentId: null, authorUserId: null },
     ]);
 
     const app = createAgentApp();
@@ -170,29 +182,14 @@ describe("delivery gate", () => {
       .send({ status: "done" });
 
     expect(res.status).toBe(422);
-    expect(res.body.gate).toBe("done_requires_pr");
+    expect(res.body.gate).toBe("done_requires_qa_pass");
   });
 
-  it("agent → done on code issue with draft PR → 422", async () => {
-    mockIssueService.getById.mockResolvedValue(codeIssue);
-    mockWorkProductService.listForIssue.mockResolvedValue([
-      { type: "pull_request", status: "draft" },
-    ]);
-
-    const app = createAgentApp();
-    const res = await request(app)
-      .patch(`/api/issues/${codeIssue.id}`)
-      .send({ status: "done" });
-
-    expect(res.status).toBe(422);
-    expect(res.body.gate).toBe("done_requires_pr");
-  });
-
-  it("board → done on code issue with no work products → 200 (bypass)", async () => {
+  it("board → done, no QA pass → 200 (bypass)", async () => {
     const issueForBoard = { ...codeIssue, assigneeAgentId: null };
     mockIssueService.getById.mockResolvedValue(issueForBoard);
     mockIssueService.update.mockResolvedValue({ ...issueForBoard, status: "done" });
-    mockWorkProductService.listForIssue.mockResolvedValue([]);
+    mockIssueService.listComments.mockResolvedValue([]);
 
     const app = createBoardApp();
     const res = await request(app)
@@ -202,7 +199,7 @@ describe("delivery gate", () => {
     expect(res.status).toBe(200);
   });
 
-  it("agent → done on non-code issue (no workspace) → 200 (escape hatch)", async () => {
+  it("agent → done, non-code issue (no workspace) → 200 (skip)", async () => {
     mockIssueService.getById.mockResolvedValue(nonCodeIssue);
     mockIssueService.update.mockResolvedValue({ ...nonCodeIssue, status: "done" });
     mockWorkProductService.listForIssue.mockResolvedValue([]);
@@ -215,9 +212,10 @@ describe("delivery gate", () => {
     expect(res.status).toBe(200);
   });
 
-  it("agent → in_review on code issue with branch work product → 200", async () => {
+  it("agent → in_review, no QA pass → 200 (gate only on done)", async () => {
     mockIssueService.getById.mockResolvedValue(codeIssue);
     mockIssueService.update.mockResolvedValue({ ...codeIssue, status: "in_review" });
+    mockIssueService.listComments.mockResolvedValue([]);
     mockWorkProductService.listForIssue.mockResolvedValue([
       { type: "branch", status: "active" },
     ]);
@@ -230,11 +228,11 @@ describe("delivery gate", () => {
     expect(res.status).toBe(200);
   });
 
-  it("agent → done on code issue with merged PR → 200", async () => {
+  it('agent → done, "QA: passed" variant → 200', async () => {
     mockIssueService.getById.mockResolvedValue(codeIssue);
     mockIssueService.update.mockResolvedValue({ ...codeIssue, status: "done" });
-    mockWorkProductService.listForIssue.mockResolvedValue([
-      { type: "pull_request", status: "merged" },
+    mockIssueService.listComments.mockResolvedValue([
+      { body: "QA: passed", authorAgentId: "qa-agent-1", authorUserId: null },
     ]);
 
     const app = createAgentApp();
@@ -245,26 +243,58 @@ describe("delivery gate", () => {
     expect(res.status).toBe(200);
   });
 
-  it("activity log contains gate details on rejection", async () => {
+  it('agent → done, "QA PASS" variant → 200', async () => {
     mockIssueService.getById.mockResolvedValue(codeIssue);
-    mockWorkProductService.listForIssue.mockResolvedValue([]);
+    mockIssueService.update.mockResolvedValue({ ...codeIssue, status: "done" });
+    mockIssueService.listComments.mockResolvedValue([
+      { body: "QA PASS — all checks green", authorUserId: "user-1", authorAgentId: null },
+    ]);
+
+    const app = createAgentApp();
+    const res = await request(app)
+      .patch(`/api/issues/${codeIssue.id}`)
+      .send({ status: "done" });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("activity log has gate details on rejection", async () => {
+    mockIssueService.getById.mockResolvedValue(codeIssue);
+    mockIssueService.listComments.mockResolvedValue([]);
 
     const app = createAgentApp();
     await request(app)
       .patch(`/api/issues/${codeIssue.id}`)
-      .send({ status: "in_review" });
+      .send({ status: "done" });
 
     expect(mockLogActivity).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        action: "issue.delivery_gate_blocked",
+        action: "issue.qa_gate_blocked",
         entityType: "issue",
         entityId: codeIssue.id,
         details: expect.objectContaining({
-          gate: "in_review_requires_artifact",
-          targetStatus: "in_review",
+          gate: "done_requires_qa_pass",
+          targetStatus: "done",
         }),
       }),
     );
+  });
+
+  it("delivery gate fires before QA gate (no PR + no QA) → done_requires_pr", async () => {
+    mockIssueService.getById.mockResolvedValue(codeIssue);
+    mockIssueService.listComments.mockResolvedValue([]);
+    // No work products — delivery gate should fire first
+    mockWorkProductService.listForIssue.mockResolvedValue([]);
+
+    const app = createAgentApp();
+    const res = await request(app)
+      .patch(`/api/issues/${codeIssue.id}`)
+      .send({ status: "done" });
+
+    expect(res.status).toBe(422);
+    expect(res.body.gate).toBe("done_requires_pr");
+    // QA gate should NOT have been reached
+    expect(mockIssueService.listComments).not.toHaveBeenCalled();
   });
 });

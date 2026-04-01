@@ -65,7 +65,7 @@ If `PAPERCLIP_APPROVAL_ID` is set:
 - Never look for unassigned work -- only work on what is assigned to you.
 - Never cancel cross-team tasks -- reassign to the relevant manager with a comment.
 - Code delivery enforcement: Agents cannot mark code tasks done without a pull request. If an agent is blocked by this gate, help them push their code or reassign to the Platform Engineer.
-- QA workflow: When delegating QA work, assign the QA agent directly on the issue. Do NOT rely on @qa-agent mentions in comments — they are unreliable and the QA gate plugin has been disabled.
+- QA workflow: Assign QA agent directly on issues for review. QA approval requires a comment containing 'QA: PASS'. The system enforces this gate on code issues before they can move to done.
 
 ## Rules
 

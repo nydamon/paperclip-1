@@ -152,6 +152,31 @@ export function issueRoutes(db: Db, storage: StorageService) {
     return null;
   }
 
+  const QA_PASS_PATTERN = /\bqa[\s:]+pass(ed)?\b/i;
+
+  async function assertQAGate(
+    issueSvc: ReturnType<typeof issueService>,
+    req: Request,
+    issue: { id: string; executionWorkspaceId: string | null },
+    targetStatus: string,
+  ): Promise<{ gate: string; reason: string } | null> {
+    if (req.actor.type !== "agent") return null;
+    if (!issue.executionWorkspaceId) return null;
+    if (targetStatus !== "done") return null;
+
+    const comments = await issueSvc.listComments(issue.id, { order: "asc" });
+    const hasQAPass = comments.some(
+      c => (c.authorAgentId || c.authorUserId) && QA_PASS_PATTERN.test(c.body),
+    );
+    if (!hasQAPass) {
+      return {
+        gate: "done_requires_qa_pass",
+        reason: "Cannot mark done without QA approval. A comment containing 'QA: PASS' from a reviewer is required.",
+      };
+    }
+    return null;
+  }
+
   function requireAgentRunId(req: Request, res: Response) {
     if (req.actor.type !== "agent") return null;
     const runId = req.actor.runId?.trim();
@@ -904,6 +929,25 @@ export function issueRoutes(db: Db, storage: StorageService) {
           details: { gate: gateResult.gate, reason: gateResult.reason, targetStatus: req.body.status },
         });
         res.status(422).json({ error: gateResult.reason, gate: gateResult.gate });
+        return;
+      }
+
+      // QA gate: agents must have QA approval before marking code issues done
+      const qaGateResult = await assertQAGate(svc, req, existing, req.body.status);
+      if (qaGateResult) {
+        const actor = getActorInfo(req);
+        await logActivity(db, {
+          companyId: existing.companyId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          agentId: actor.agentId,
+          runId: actor.runId,
+          action: "issue.qa_gate_blocked",
+          entityType: "issue",
+          entityId: existing.id,
+          details: { gate: qaGateResult.gate, reason: qaGateResult.reason, targetStatus: req.body.status },
+        });
+        res.status(422).json({ error: qaGateResult.reason, gate: qaGateResult.gate });
         return;
       }
     }
