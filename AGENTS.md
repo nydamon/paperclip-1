@@ -75,6 +75,9 @@ If you change schema/API behavior, update all impacted layers:
 - Budget hard-stop auto-pause behavior
 - Activity logging for mutating actions
 - QA approval gate: code issues require a `QA: PASS` comment before moving to done
+- Forward-only issue transitions are enforced; do not invent ad hoc backward resets to force work into motion
+- Direct assignment is the primary control path for waking agents; do not rely on soft `@mention` choreography as the main handoff mechanism
+- Merged is not validated; deployed is not board-ready; use implemented / deployed / validated / board-ready language precisely
 
 4. Do not replace strategic docs wholesale unless asked.
 Prefer additive updates. Keep `doc/SPEC.md` and `doc/SPEC-implementation.md` aligned.
