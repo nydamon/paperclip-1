@@ -292,6 +292,75 @@ High-risk PRs require extra caution and may require human review.
 
 ---
 
+## Quality gates (delivery gate + QA gate)
+
+Two server-side gates enforce code quality workflows for agent-authored issues. Both run inline in the PATCH `/issues/:id` handler and return 422 when requirements aren't met.
+
+### Three-layer design
+
+1. **Instructions** — `AGENTS.md` (Code Delivery Protocol + QA Approval Protocol), CEO `HEARTBEAT.md`, root `AGENTS.md` (Definition of Done items 5–6)
+2. **Workspace comment** — `buildWorkspaceReadyComment()` in `server/src/services/workspace-runtime.ts` reminds agents at workspace provisioning
+3. **Hard gates** — `assertDeliveryGate()` and `assertQAGate()` in `server/src/routes/issues.ts` enforce at the API level
+
+### Delivery gate (`assertDeliveryGate`)
+
+| Transition | Requirement |
+|------------|-------------|
+| → `in_review` | At least one `issue_work_products` record of type `branch`, `commit`, or `pull_request` |
+| → `done` | A `pull_request` work product with status `active`, `ready_for_review`, `approved`, or `merged` |
+
+### QA gate (`assertQAGate`)
+
+| Transition | Requirement |
+|------------|-------------|
+| → `done` | A comment matching `/\bqa[\s:]+pass(ed)?\b/i` from an authenticated author who is NOT the issue assignee |
+
+**Self-QA prevention:** The assigned agent's own `QA: PASS` comments are ignored. A different agent or board user must approve.
+
+### Transition gate (`assertAgentTransition`)
+
+Agents follow a forward-only state machine. Terminal states (done, cancelled) cannot be exited by agents — only board users can reopen. Both reopen paths (PATCH handler implicit reopen and POST comments explicit reopen) are guarded.
+
+| From | Allowed targets |
+|------|----------------|
+| backlog | todo, in_progress, cancelled |
+| todo | in_progress, backlog, cancelled |
+| in_progress | in_review, done, blocked, cancelled |
+| in_review | in_progress, done, cancelled |
+| blocked | in_progress, todo, cancelled |
+| done | _(none — terminal)_ |
+| cancelled | _(none — terminal)_ |
+
+### Gate ordering
+
+Transition gate fires first (cheapest check), then delivery gate, then QA gate. This ensures invalid moves are rejected before checking work products or QA approval.
+
+### Escape hatches (all gates)
+
+- **Non-code issues**: Issues without `executionWorkspaceId` skip delivery + QA gates (transition gate always applies)
+- **Board actors**: Only `req.actor.type === "agent"` is gated — board users always bypass
+
+### Observability
+
+Rejected transitions are logged in the activity log:
+- `issue.transition_blocked` — invalid agent state transition
+- `issue.delivery_gate_blocked` — missing work products
+- `issue.qa_gate_blocked` — missing QA approval
+
+### Key files
+
+- `server/src/routes/issues.ts` — `assertAgentTransition()`, `assertDeliveryGate()`, `assertQAGate()`, PATCH handler integration
+- `server/src/__tests__/transition-gate.test.ts` — 12 transition gate tests
+- `server/src/__tests__/delivery-gate.test.ts` — 8 delivery gate tests
+- `server/src/__tests__/qa-gate.test.ts` — 13 QA gate tests (including 3 self-QA prevention cases)
+- `server/src/services/workspace-runtime.ts` — workspace ready comment
+- `server/src/onboarding-assets/default/AGENTS.md` — Code Delivery Protocol + QA Approval Protocol
+- `server/src/onboarding-assets/ceo/HEARTBEAT.md` — CEO delivery/QA enforcement guidance
+- `AGENTS.md` — Definition of Done items 5–6
+- `doc/plans/paperclip-enforceable-system-design-v3.md` — Architecture decision record
+
+---
+
 ## How to add credentials / secrets to Paperclip agents
 
 This section documents the exact process for adding new API credentials as encrypted secrets and wiring them to specific agents. Follow this every time — do not improvise.
