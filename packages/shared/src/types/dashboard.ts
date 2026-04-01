@@ -18,4 +18,8 @@ export interface DashboardSummary {
     monthUtilizationPercent: number;
   };
   pendingApprovals: number;
+  dispatch?: {
+    idleAgentsWithAssignedWork: number;
+    recoverableIssueCount: number;
+  };
 }

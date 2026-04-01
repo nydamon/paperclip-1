@@ -209,6 +209,25 @@ export function Dashboard() {
 
       {data && (
         <>
+          {(data.dispatch?.recoverableIssueCount ?? 0) > 0 ? (
+            <div className="flex items-start justify-between gap-3 rounded-xl border border-amber-500/25 bg-[linear-gradient(180deg,rgba(245,158,11,0.16),rgba(255,255,255,0.02))] px-4 py-3">
+              <div className="flex items-start gap-2.5">
+                <CircleDot className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+                <div>
+                  <p className="text-sm font-medium text-amber-50">
+                    Dispatch gap detected: {data.dispatch?.recoverableIssueCount} recoverable issue{data.dispatch?.recoverableIssueCount === 1 ? "" : "s"}
+                  </p>
+                  <p className="text-xs text-amber-100/70">
+                    {data.dispatch?.idleAgentsWithAssignedWork ?? 0} idle agent{(data.dispatch?.idleAgentsWithAssignedWork ?? 0) === 1 ? "" : "s"} still own active work with no queued or running execution.
+                  </p>
+                </div>
+              </div>
+              <Link to="/issues" className="text-sm underline underline-offset-2 text-amber-100">
+                Open issues
+              </Link>
+            </div>
+          ) : null}
+
           <div className="grid grid-cols-2 xl:grid-cols-4 gap-1 sm:gap-2">
             <MetricCard
               icon={Bot}
