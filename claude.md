@@ -347,17 +347,76 @@ Rejected transitions are logged in the activity log:
 - `issue.delivery_gate_blocked` — missing work products
 - `issue.qa_gate_blocked` — missing QA approval
 
+### Work product URL verification (PR #124)
+
+Agents must provide valid GitHub URLs when creating code delivery work products. This prevents fabricated work product records from bypassing the delivery gate.
+
+| Work product type | URL requirement (agents only) |
+|---|---|
+| `pull_request` | **Required** — must match `https://github.com/{owner}/{repo}/pull/{number}`. `externalId` (PR number) also required. |
+| `branch` | Optional — but if provided, must match `https://github.com/{owner}/{repo}/tree/{branch}` |
+| `commit` | Optional — but if provided, must match `https://github.com/{owner}/{repo}/commit/{sha}` |
+
+The delivery gate also verifies at gate time: `→ done` requires the PR work product to have a valid GitHub URL (not just a valid status).
+
+Board users bypass all URL validation.
+
 ### Key files
 
-- `server/src/routes/issues.ts` — `assertAgentTransition()`, `assertDeliveryGate()`, `assertQAGate()`, PATCH handler integration
+- `server/src/routes/issues.ts` — `assertAgentTransition()`, `assertDeliveryGate()`, `assertQAGate()`, URL patterns, creation-time validation
 - `server/src/__tests__/transition-gate.test.ts` — 12 transition gate tests
-- `server/src/__tests__/delivery-gate.test.ts` — 8 delivery gate tests
+- `server/src/__tests__/delivery-gate.test.ts` — 10 delivery gate tests (including URL verification)
 - `server/src/__tests__/qa-gate.test.ts` — 13 QA gate tests (including 3 self-QA prevention cases)
+- `server/src/__tests__/work-product-verification.test.ts` — 11 work product URL verification tests
 - `server/src/services/workspace-runtime.ts` — workspace ready comment
 - `server/src/onboarding-assets/default/AGENTS.md` — Code Delivery Protocol + QA Approval Protocol
 - `server/src/onboarding-assets/ceo/HEARTBEAT.md` — CEO delivery/QA enforcement guidance
 - `AGENTS.md` — Definition of Done items 5–6
 - `doc/plans/paperclip-enforceable-system-design-v3.md` — Architecture decision record
+
+---
+
+## Pipeline watchdog (observe-only)
+
+External safety layer that detects dispatch anomalies, stranded assignments, and RTAA categorization drift. Runs every 15 minutes via GitHub Actions. Does **not** mutate state — observe and report only.
+
+### What it checks
+
+1. **Stranded assignments** — active issues assigned to paused/errored agents
+2. **Dispatch anomalies** — actionable issues with no pickup evidence (`executionRunId`/`checkoutRunId`) past a 90-second grace window
+3. **RTAA miscategorization** — ViraCue tasks that should be under the RTAA project but aren't
+
+### Usage
+
+```bash
+# Manual trigger
+gh workflow run pipeline-watchdog.yml --repo Viraforge/paperclip --ref master
+
+# View latest report
+gh run list --repo Viraforge/paperclip --workflow=pipeline-watchdog.yml --limit 1
+# Download artifact from the run for the full markdown report
+```
+
+### GitHub secrets configured
+
+| Secret | Value |
+|---|---|
+| `PAPERCLIP_BASE_URL` | `http://64.176.199.162:3100/api` |
+| `PAPERCLIP_API_KEY` | Hermes agent API key |
+| `PAPERCLIP_COMPANY_ID` | DLD Ent. company ID |
+| `WATCHDOG_RTAA_PROJECT_ID` | RTAA project ID |
+| `WATCHDOG_ROOT_ISSUES` | Comma-separated RTAA root issue IDs (9 entries) |
+
+### Key files
+
+- `scripts/pipeline-watchdog.mjs` — watchdog script (pure functions, no side effects)
+- `.github/workflows/pipeline-watchdog.yml` — scheduled workflow (every 15 min + manual dispatch)
+- `server/src/__tests__/pipeline-watchdog.test.ts` — unit tests
+- `docs/deploy/pipeline-watchdog.md` — operational documentation
+
+### Docker build speedup (PR #125)
+
+The `docker.yml` workflow previously built `linux/amd64,linux/arm64` — the ARM64 cross-compilation via QEMU took ~20 minutes. The VPS is x86_64 only, so ARM64 was dropped. Build time: ~25 min → ~5 min.
 
 ---
 
