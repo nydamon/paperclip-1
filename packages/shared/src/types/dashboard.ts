@@ -21,5 +21,19 @@ export interface DashboardSummary {
   dispatch?: {
     idleAgentsWithAssignedWork: number;
     recoverableIssueCount: number;
+    samples: Array<{
+      issueId: string;
+      issueIdentifier: string;
+      issueTitle: string;
+      issueStatus: string;
+      assigneeStatus: string;
+      reasonClass: string;
+      adoptionReceipt: "missing" | "execution_started";
+      firstProgressAt: string | null;
+      latestWakeSource: string | null;
+      latestWakeReason: string | null;
+      latestWakeRequestedAt: string | null;
+      autoRecoveryAttempts: number;
+    }>;
   };
 }

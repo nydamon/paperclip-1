@@ -191,18 +191,38 @@ describe("idle-agent dispatch gap recovery", () => {
 
     const summary = await dashboard.summary(companyId);
 
-    expect(summary.dispatch).toEqual({
-      idleAgentsWithAssignedWork: 1,
-      recoverableIssueCount: 1,
+    expect(summary.dispatch?.idleAgentsWithAssignedWork).toBe(1);
+    expect(summary.dispatch?.recoverableIssueCount).toBe(1);
+    expect(summary.dispatch?.samples.length).toBe(1);
+    expect(summary.dispatch?.samples[0]).toMatchObject({
+      reasonClass: "activation_pending_first_adoption",
+      adoptionReceipt: "missing",
+      latestWakeSource: null,
+      latestWakeReason: null,
+      autoRecoveryAttempts: 0,
     });
+    expect(summary.dispatch?.samples[0]?.issueIdentifier).toMatch(/^T[A-Z0-9]+-1$/);
   });
 
-  it("escalates after one automatic activation recovery attempt instead of retriggering forever", async () => {
-    const { agentId, issueId, lastHeartbeatAt } = await seedIdleIssueGap();
+  it("escalates when a prior auto-recovery attempt exists but activation still has no first progress", async () => {
+    const { companyId, agentId, issueId, lastHeartbeatAt } = await seedIdleIssueGap();
     const heartbeat = heartbeatService(db);
 
+    await db.insert(agentWakeupRequests).values({
+      id: randomUUID(),
+      companyId,
+      agentId,
+      source: "timer",
+      triggerDetail: "system",
+      reason: "idle_issue_dispatch_gap",
+      payload: { issueId },
+      status: "failed",
+      requestedByActorType: "system",
+      requestedByActorId: "heartbeat_scheduler",
+    });
+
     await heartbeat.tickTimers(new Date(lastHeartbeatAt.getTime() + 60_000));
-    const wakeCountAfterFirstTick = await db
+    const wakeCountAfterTick = await db
       .select({ count: sql<number>`count(*)` })
       .from(agentWakeupRequests)
       .where(
@@ -212,22 +232,7 @@ describe("idle-agent dispatch gap recovery", () => {
         ),
       )
       .then((rows) => Number(rows[0]?.count ?? 0));
-    expect(wakeCountAfterFirstTick).toBe(1);
-
-    await waitForAgentRunsToSettle(agentId);
-
-    await heartbeat.tickTimers(new Date(lastHeartbeatAt.getTime() + 120_000));
-    const wakeCountAfterSecondTick = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(agentWakeupRequests)
-      .where(
-        and(
-          eq(agentWakeupRequests.reason, "idle_issue_dispatch_gap"),
-          sql`${agentWakeupRequests.payload} ->> 'issueId' = ${issueId}`,
-        ),
-      )
-      .then((rows) => Number(rows[0]?.count ?? 0));
-    expect(wakeCountAfterSecondTick).toBe(1);
+    expect(wakeCountAfterTick).toBe(1);
 
     const issue = await db
       .select({ status: issues.status })

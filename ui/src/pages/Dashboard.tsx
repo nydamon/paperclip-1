@@ -220,6 +220,20 @@ export function Dashboard() {
                   <p className="text-xs text-amber-100/70">
                     {data.dispatch?.idleAgentsWithAssignedWork ?? 0} idle agent{(data.dispatch?.idleAgentsWithAssignedWork ?? 0) === 1 ? "" : "s"} still own active work with no queued or running execution.
                   </p>
+                  {(data.dispatch?.samples?.length ?? 0) > 0 ? (
+                    <div className="mt-2 space-y-1 text-xs text-amber-100/80">
+                      {data.dispatch!.samples.slice(0, 2).map((sample) => (
+                        <p key={sample.issueId}>
+                          <span className="font-medium">{sample.issueIdentifier}</span>
+                          {" · "}
+                          {sample.reasonClass}
+                          {" · adoption:"} {sample.adoptionReceipt}
+                          {sample.latestWakeSource ? ` · wake:${sample.latestWakeSource}` : ""}
+                          {sample.latestWakeRequestedAt ? ` (${timeAgo(sample.latestWakeRequestedAt)})` : ""}
+                        </p>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               </div>
               <Link to="/issues" className="text-sm underline underline-offset-2 text-amber-100">
