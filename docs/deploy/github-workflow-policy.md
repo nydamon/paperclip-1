@@ -39,7 +39,8 @@ End-to-end flow (human or agent developers):
 3. **AI Code Reviewer** (when enabled) posts structured feedback and a verdict where required.
 4. **Developer** prepares fix patches; **operator** applies commits to the PR branch (not a “relay” of review prose — fixes land as commits).
 5. **Required checks** pass (`verify`, `policy`, and any repo-specific gates such as `ai-review/verdict` where configured).
-6. **Operator** merges when policy allows (auto-merge only when branch protection and risk rules say so).
+6. Before the related issue moves to `in_review`, post a structured **Review Handoff** comment on the issue containing at minimum: change summary, branch, commit SHA, PR link, checks status, and known caveats / next reviewer.
+7. **Operator** merges when policy allows (auto-merge only when branch protection and risk rules say so).
 
 ## Branch protection (principles)
 

@@ -78,6 +78,7 @@ If you change schema/API behavior, update all impacted layers:
 - Forward-only issue transitions are enforced; do not invent ad hoc backward resets to force work into motion
 - Direct assignment is the primary control path for waking agents; do not rely on soft `@mention` choreography as the main handoff mechanism
 - Merged is not validated; deployed is not board-ready; use implemented / deployed / validated / board-ready language precisely
+- For code and delivery issues entering `in_review`, include a single structured review handoff comment containing explicit `Summary:`, `Branch:`, `Commit:`, `PR:`, `Checks:`, `Reviewer:`, and `Caveats:` fields
 
 4. Do not replace strategic docs wholesale unless asked.
 Prefer additive updates. Keep `doc/SPEC.md` and `doc/SPEC-implementation.md` aligned.

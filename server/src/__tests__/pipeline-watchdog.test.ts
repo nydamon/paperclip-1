@@ -8,6 +8,8 @@ const {
   detectStrandedAssignments,
   detectMiscategorizedRtaaTasks,
   summarizeByStatus,
+  analyzeReviewHandoff,
+  detectReviewHandoffGaps,
   formatWatchdogReport,
 } = await import("../../../scripts/pipeline-watchdog.mjs");
 
@@ -210,6 +212,106 @@ describe("pipeline watchdog", () => {
     expect(miscategorized.map((issue) => issue.identifier)).toEqual(["DLD-4"]);
   });
 
+  it("flags code-review lanes missing structured review handoff evidence", () => {
+    const issue = {
+      id: "issue-1",
+      identifier: "DLD-7",
+      title: "Fix simulator runtime path",
+      status: "in_review",
+    };
+    const comments = [
+      { body: "Ready for in-review. Commit abc1234." },
+    ];
+    const workProducts = [{ type: "pull_request" }];
+
+    const review = analyzeReviewHandoff(issue, comments, workProducts);
+    expect(review.applies).toBe(true);
+    expect(review.compliant).toBe(false);
+    expect(review.missing).toEqual(["prLink", "checks"]);
+
+    const gaps = detectReviewHandoffGaps(
+      [issue],
+      new Map([[issue.id, comments]]),
+      new Map([[issue.id, workProducts]]),
+    );
+    expect(gaps).toEqual([
+      {
+        identifier: "DLD-7",
+        title: "Fix simulator runtime path",
+        missing: ["prLink", "checks"],
+        status: "in_review",
+      },
+    ]);
+  });
+
+  it("skips review handoff for non-code issues (no work products)", () => {
+    const issue = {
+      id: "issue-2",
+      identifier: "DLD-8",
+      title: "Update documentation",
+      status: "in_review",
+    };
+    const review = analyzeReviewHandoff(issue, [], []);
+    expect(review.applies).toBe(false);
+    expect(review.compliant).toBe(true);
+  });
+
+  it("marks fully compliant handoff as compliant", () => {
+    const issue = {
+      id: "issue-3",
+      identifier: "DLD-9",
+      title: "Add auth flow",
+      status: "in_review",
+    };
+    const comments = [
+      {
+        body: [
+          "Review handoff — ready for in-review.",
+          "Commit abc1234def on branch fix/auth.",
+          "PR #42 https://github.com/org/repo/pull/42",
+          "Checks: verify and policy passed.",
+        ].join("\n"),
+      },
+    ];
+    const workProducts = [{ type: "branch" }];
+
+    const review = analyzeReviewHandoff(issue, comments, workProducts);
+    expect(review.applies).toBe(true);
+    expect(review.compliant).toBe(true);
+    expect(review.missing).toEqual([]);
+  });
+
+  it("reports all missing when no comments exist on code issue", () => {
+    const issue = {
+      id: "issue-4",
+      identifier: "DLD-15",
+      title: "Add feature",
+      status: "in_review",
+    };
+    const workProducts = [{ type: "commit" }];
+
+    const review = analyzeReviewHandoff(issue, [], workProducts);
+    expect(review.applies).toBe(true);
+    expect(review.compliant).toBe(false);
+    expect(review.missing).toEqual(["reviewRequest", "prLink", "commit", "checks"]);
+  });
+
+  it("detectReviewHandoffGaps only examines in_review issues", () => {
+    const issues = [
+      { id: "a", identifier: "DLD-20", title: "In progress", status: "in_progress" },
+      { id: "b", identifier: "DLD-21", title: "In review", status: "in_review" },
+    ];
+    const workProducts = [{ type: "pull_request" }];
+    const gaps = detectReviewHandoffGaps(
+      issues,
+      new Map(),
+      new Map([["b", workProducts]]),
+    );
+    // Only DLD-21 should be examined (and flagged since no comments)
+    expect(gaps.length).toBe(1);
+    expect(gaps[0].identifier).toBe("DLD-21");
+  });
+
   it("renders a readable markdown report", () => {
     const report = formatWatchdogReport({
       companyId: "company-1",
@@ -235,11 +337,21 @@ describe("pipeline watchdog", () => {
         },
       ],
       miscategorized: [],
+      reviewHandoffGaps: [
+        {
+          identifier: "DLD-7",
+          title: "Missing review handoff",
+          missing: ["prLink", "checks"],
+          status: "in_review",
+        },
+      ],
     });
 
     expect(report).toContain("# Paperclip Pipeline Watchdog Report");
     expect(report).toContain("DLD-6");
     expect(report).toContain("non-dispatchable-agent");
     expect(report).toContain("DLD-5");
+    expect(report).toContain("Review handoff gaps");
+    expect(report).toContain("DLD-7");
   });
 });

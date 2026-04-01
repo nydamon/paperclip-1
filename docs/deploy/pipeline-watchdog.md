@@ -20,6 +20,8 @@ The initial implementation scans active issues and agents, then reports:
    - active work sitting on paused or errored agents
 3. **RTAA categorization drift**
    - ViraCue / Realtime Agent Assistant work that is not filed under the RTAA project
+4. **Review handoff gaps**
+   - `in_review` code/delivery lanes missing a single structured handoff comment with `Summary:`, `Branch:`, `Commit:`, `PR:`, `Checks:`, `Reviewer:`, and `Caveats:` fields
 
 The script is intentionally conservative: it observes and reports. It does not auto-reassign or auto-close tasks.
 

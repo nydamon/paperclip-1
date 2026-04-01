@@ -5,6 +5,11 @@ import { resolve } from "node:path";
 
 const ACTIVE_STATUSES = ["todo", "in_progress", "blocked", "in_review"];
 const DEFAULT_MIN_ACTIONABLE_AGE_SECONDS = 90;
+const REVIEW_REQUEST_RE = /review handoff|ready for in-?review|request(?:ing)? review|opened pr|code review/i;
+const PR_LINK_RE = /https:\/\/github\.com\/[^\s)]+\/pull\/\d+|\bPR\s*#\d+/i;
+const COMMIT_RE = /\bcommit\b[^\n`]*`?[0-9a-f]{7,40}`?\b/i;
+const CHECKS_RE = /^\s*checks\s*:/im;
+const CODE_WORK_PRODUCT_TYPES = new Set(["pull_request", "branch", "commit"]);
 
 export function isDispatchableAgent(agent) {
   if (!agent) return false;
@@ -64,7 +69,53 @@ export function summarizeByStatus(issues) {
   }, {});
 }
 
-export function formatWatchdogReport({ companyId, issues, stranded, miscategorized, generatedAt }) {
+export function analyzeReviewHandoff(issue, comments = [], workProducts = []) {
+  const hasCodeDeliveryProduct = workProducts.some((wp) => CODE_WORK_PRODUCT_TYPES.has(wp?.type));
+  if (!hasCodeDeliveryProduct) {
+    return { applies: false, compliant: true, missing: [], markers: {} };
+  }
+
+  const bodies = comments.map((comment) => comment?.body ?? "").join("\n\n");
+
+  const markers = {
+    reviewRequest: REVIEW_REQUEST_RE.test(bodies),
+    prLink: PR_LINK_RE.test(bodies),
+    commit: COMMIT_RE.test(bodies),
+    checks: CHECKS_RE.test(bodies),
+  };
+  const missing = Object.entries(markers)
+    .filter(([, present]) => !present)
+    .map(([key]) => key);
+
+  return {
+    applies: true,
+    compliant: missing.length === 0,
+    missing,
+    markers,
+  };
+}
+
+export function detectReviewHandoffGaps(issues, commentsByIssue = new Map(), workProductsByIssue = new Map()) {
+  return issues
+    .filter((issue) => issue.status === "in_review")
+    .map((issue) => ({
+      issue,
+      review: analyzeReviewHandoff(
+        issue,
+        commentsByIssue.get(issue.id) ?? [],
+        workProductsByIssue.get(issue.id) ?? [],
+      ),
+    }))
+    .filter(({ review }) => review.applies && !review.compliant)
+    .map(({ issue, review }) => ({
+      identifier: issue.identifier,
+      title: issue.title,
+      missing: review.missing,
+      status: issue.status,
+    }));
+}
+
+export function formatWatchdogReport({ companyId, issues, stranded, miscategorized, reviewHandoffGaps, generatedAt }) {
   const counts = summarizeByStatus(issues);
   const lines = [];
   lines.push(`# Paperclip Pipeline Watchdog Report`);
@@ -75,6 +126,7 @@ export function formatWatchdogReport({ companyId, issues, stranded, miscategoriz
   lines.push(`- Status counts: ${Object.entries(counts).map(([k,v]) => `${k}=${v}`).join(", ") || "none"}`);
   lines.push(`- Stranded assignments: ${stranded.length}`);
   lines.push(`- Miscategorized RTAA tasks: ${miscategorized.length}`);
+  lines.push(`- Review handoff gaps: ${reviewHandoffGaps.length}`);
   lines.push("");
 
   lines.push(`## Stranded / non-dispatching issues`);
@@ -95,6 +147,16 @@ export function formatWatchdogReport({ companyId, issues, stranded, miscategoriz
   } else {
     for (const issue of miscategorized) {
       lines.push(`- ${issue.identifier}: ${issue.title} | projectId=${issue.projectId ?? "none"} | parentId=${issue.parentId ?? "none"}`);
+    }
+  }
+  lines.push("");
+
+  lines.push(`## Review handoff gaps`);
+  if (reviewHandoffGaps.length === 0) {
+    lines.push(`- None detected`);
+  } else {
+    for (const gap of reviewHandoffGaps) {
+      lines.push(`- ${gap.identifier}: ${gap.title} | missing=${gap.missing.join(",")}`);
     }
   }
   lines.push("");
@@ -128,7 +190,24 @@ export async function loadWatchdogData({ baseUrl, token, companyId }) {
     fetchJson(`${safeBase}/companies/${companyId}/agents`, token),
     fetchJson(`${safeBase}/companies/${companyId}/issues?status=${ACTIVE_STATUSES.join(",")}`, token),
   ]);
-  return { agents, issues };
+  const inReviewIssues = issues.filter((issue) => issue.status === "in_review");
+  const commentsByIssue = new Map();
+  const workProductsByIssue = new Map();
+  await Promise.all(
+    inReviewIssues.map(async (issue) => {
+      try {
+        const [comments, workProducts] = await Promise.all([
+          fetchJson(`${safeBase}/issues/${issue.id}/comments`, token),
+          fetchJson(`${safeBase}/issues/${issue.id}/work-products`, token),
+        ]);
+        commentsByIssue.set(issue.id, comments);
+        workProductsByIssue.set(issue.id, workProducts);
+      } catch (err) {
+        console.error(`Failed to load review data for ${issue.identifier ?? issue.id}: ${err.message}`);
+      }
+    }),
+  );
+  return { agents, issues, commentsByIssue, workProductsByIssue };
 }
 
 export async function runWatchdog({
@@ -145,27 +224,29 @@ export async function runWatchdog({
   if (!token) throw new Error("PAPERCLIP_API_KEY is required");
   if (!companyId) throw new Error("PAPERCLIP_COMPANY_ID is required");
 
-  const { agents, issues } = await loadWatchdogData({ baseUrl, token, companyId });
+  const { agents, issues, commentsByIssue, workProductsByIssue } = await loadWatchdogData({ baseUrl, token, companyId });
   const agentById = new Map(agents.map((agent) => [agent.id, agent]));
   const stranded = detectStrandedAssignments(issues, agentById, { minActionableAgeSeconds });
   const miscategorized = detectMiscategorizedRtaaTasks(issues, { rtaaProjectId, rootIssueIds });
+  const reviewHandoffGaps = detectReviewHandoffGaps(issues, commentsByIssue, workProductsByIssue);
 
   const report = formatWatchdogReport({
     companyId,
     issues,
     stranded,
     miscategorized,
+    reviewHandoffGaps,
     generatedAt: new Date().toISOString(),
   });
   log(report);
 
-  if (stranded.length || miscategorized.length) {
+  if (stranded.length || miscategorized.length || reviewHandoffGaps.length) {
     error(
-      `WATCHDOG_ALERT stranded=${stranded.length} miscategorized=${miscategorized.length}`,
+      `WATCHDOG_ALERT stranded=${stranded.length} miscategorized=${miscategorized.length} reviewHandoffGaps=${reviewHandoffGaps.length}`,
     );
   }
 
-  return { issues, stranded, miscategorized, report };
+  return { issues, stranded, miscategorized, reviewHandoffGaps, report };
 }
 
 async function main() {
