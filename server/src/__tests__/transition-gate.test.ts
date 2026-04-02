@@ -7,9 +7,11 @@ import { errorHandler } from "../middleware/index.js";
 const mockIssueService = vi.hoisted(() => ({
   getById: vi.fn(),
   update: vi.fn(),
+  addComment: vi.fn(),
   assertCheckoutOwner: vi.fn(),
   getCommentCursor: vi.fn(),
   listComments: vi.fn(),
+  findMentionedAgents: vi.fn(),
 }));
 
 const mockWorkProductService = vi.hoisted(() => ({
@@ -137,6 +139,8 @@ describe("transition gate", () => {
     mockIssueService.listComments.mockResolvedValue([
       { body: "QA: PASS", authorAgentId: "qa-agent-1", authorUserId: null },
     ]);
+    mockIssueService.addComment.mockResolvedValue({ id: "comment-1", body: "test" });
+    mockIssueService.findMentionedAgents.mockResolvedValue([]);
   });
 
   it("agent: done → backlog blocked", async () => {
@@ -197,7 +201,7 @@ describe("transition gate", () => {
 
     const res = await request(createAgentApp())
       .patch(`/api/issues/${issue.id}`)
-      .send({ status: "in_review" });
+      .send({ status: "in_review", comment: "Moving to review" });
 
     expect(res.status).toBe(200);
   });
@@ -209,7 +213,7 @@ describe("transition gate", () => {
 
     const res = await request(createAgentApp())
       .patch(`/api/issues/${issue.id}`)
-      .send({ status: "in_progress" });
+      .send({ status: "in_progress", comment: "Rework needed" });
 
     expect(res.status).toBe(200);
   });
@@ -221,7 +225,7 @@ describe("transition gate", () => {
 
     const res = await request(createAgentApp())
       .patch(`/api/issues/${issue.id}`)
-      .send({ status: "in_progress" });
+      .send({ status: "in_progress", comment: "Unblocked" });
 
     expect(res.status).toBe(200);
   });
@@ -233,7 +237,7 @@ describe("transition gate", () => {
 
     const res = await request(createAgentApp())
       .patch(`/api/issues/${issue.id}`)
-      .send({ status: "backlog" });
+      .send({ status: "backlog", comment: "Deprioritizing" });
 
     expect(res.status).toBe(200);
   });

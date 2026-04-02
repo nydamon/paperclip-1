@@ -7,9 +7,11 @@ import { errorHandler } from "../middleware/index.js";
 const mockIssueService = vi.hoisted(() => ({
   getById: vi.fn(),
   update: vi.fn(),
+  addComment: vi.fn(),
   assertCheckoutOwner: vi.fn(),
   getCommentCursor: vi.fn(),
   listComments: vi.fn(),
+  findMentionedAgents: vi.fn(),
 }));
 
 const mockWorkProductService = vi.hoisted(() => ({
@@ -221,6 +223,8 @@ describe("assignment policy gate", () => {
     mockIssueService.listComments.mockResolvedValue([
       { body: "QA: PASS", authorAgentId: QA_1, authorUserId: null },
     ]);
+    mockIssueService.addComment.mockResolvedValue({ id: "comment-1", body: "test" });
+    mockIssueService.findMentionedAgents.mockResolvedValue([]);
   });
 
   // --- Ownership ---
@@ -236,7 +240,7 @@ describe("assignment policy gate", () => {
 
     const res = await request(createAgentApp(ENGINEER_1))
       .patch(`/api/issues/${issue.id}`)
-      .send({ assigneeAgentId: QA_1, status: "in_review" });
+      .send({ assigneeAgentId: QA_1, status: "in_review", comment: "Handing off to QA" });
 
     expect(res.status).toBe(200);
   });
@@ -278,7 +282,7 @@ describe("assignment policy gate", () => {
 
     const res = await request(createAgentApp(QA_1))
       .patch(`/api/issues/${issue.id}`)
-      .send({ assigneeAgentId: ENGINEER_1, status: "in_progress" });
+      .send({ assigneeAgentId: ENGINEER_1, status: "in_progress", comment: "Returning for rework" });
 
     expect(res.status).toBe(200);
   });
@@ -310,7 +314,7 @@ describe("assignment policy gate", () => {
 
     const res = await request(createAgentApp(CEO_1))
       .patch(`/api/issues/${issue.id}`)
-      .send({ assigneeAgentId: QA_1, status: "in_review" });
+      .send({ assigneeAgentId: QA_1, status: "in_review", comment: "Reassigning to QA" });
 
     expect(res.status).toBe(200);
   });
@@ -325,7 +329,7 @@ describe("assignment policy gate", () => {
 
     const res = await request(createAgentApp(CEO_1))
       .patch(`/api/issues/${issue.id}`)
-      .send({ assigneeAgentId: CMO_1 });
+      .send({ assigneeAgentId: CMO_1, comment: "Assigning to CMO" });
 
     expect(res.status).toBe(200);
   });
@@ -403,7 +407,7 @@ describe("assignment policy gate", () => {
 
     const res = await request(createAgentApp(CEO_1))
       .patch(`/api/issues/${issue.id}`)
-      .send({ assigneeAgentId: ENGINEER_1 });
+      .send({ assigneeAgentId: ENGINEER_1, comment: "Assigning to engineer" });
 
     expect(res.status).toBe(200);
   });

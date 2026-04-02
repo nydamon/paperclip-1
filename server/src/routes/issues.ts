@@ -319,6 +319,22 @@ export function issueRoutes(db: Db, storage: StorageService) {
     return null;
   }
 
+  function assertAgentCommentRequired(
+    req: Request,
+    existing: { status: string; assigneeAgentId: string | null; assigneeUserId: string | null },
+    commentBody: string | undefined,
+  ): { gate: string; reason: string } | null {
+    if (req.actor.type !== "agent") return null;
+    const statusChanging = req.body.status && req.body.status !== existing.status;
+    const assigneeChanging =
+      (req.body.assigneeAgentId !== undefined && req.body.assigneeAgentId !== existing.assigneeAgentId) ||
+      (req.body.assigneeUserId !== undefined && req.body.assigneeUserId !== existing.assigneeUserId);
+    if ((statusChanging || assigneeChanging) && !commentBody) {
+      return { gate: "comment_required", reason: "Agents must include a comment when changing status or assignee." };
+    }
+    return null;
+  }
+
   function requireAgentRunId(req: Request, res: Response) {
     if (req.actor.type !== "agent") return null;
     const runId = req.actor.runId?.trim();
@@ -1207,6 +1223,31 @@ export function issueRoutes(db: Db, storage: StorageService) {
       }
       updateFields.status = "todo";
     }
+
+    // Comment-required gate: agents must explain status/assignee changes
+    const commentGateResult = assertAgentCommentRequired(req, existing, commentBody);
+    if (commentGateResult) {
+      await logActivity(db, {
+        companyId: existing.companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "issue.comment_required_blocked",
+        entityType: "issue",
+        entityId: existing.id,
+        details: {
+          gate: commentGateResult.gate,
+          reason: commentGateResult.reason,
+          targetStatus: req.body.status ?? existing.status,
+          targetAssigneeAgentId: req.body.assigneeAgentId,
+          targetAssigneeUserId: req.body.assigneeUserId,
+        },
+      });
+      res.status(422).json({ error: commentGateResult.reason, gate: commentGateResult.gate });
+      return;
+    }
+
     let issue;
     try {
       issue = await svc.update(id, updateFields);

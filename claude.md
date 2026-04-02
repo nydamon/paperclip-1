@@ -292,9 +292,9 @@ High-risk PRs require extra caution and may require human review.
 
 ---
 
-## Quality gates (delivery gate + QA gate)
+## Quality gates (delivery gate + QA gate + comment-required gate)
 
-Two server-side gates enforce code quality workflows for agent-authored issues. Both run inline in the PATCH `/issues/:id` handler and return 422 when requirements aren't met.
+Server-side gates enforce code quality workflows for agent-authored issues. All run inline in the PATCH `/issues/:id` handler and return 422 when requirements aren't met.
 
 ### Three-layer design
 
@@ -317,6 +317,10 @@ Two server-side gates enforce code quality workflows for agent-authored issues. 
 
 **Self-QA prevention:** The assigned agent's own `QA: PASS` comments are ignored. A different agent or board user must approve.
 
+### Comment-required gate (`assertAgentCommentRequired`)
+
+Agents must include a comment when changing status or assignee. Returns 422 with gate `comment_required` if either field changes without a `comment` in the request body. Board users bypass this gate. Non-status/non-assignee updates (title, priority, etc.) do not require a comment.
+
 ### Transition gate (`assertAgentTransition`)
 
 Agents follow a forward-only state machine. Terminal states (done, cancelled) cannot be exited by agents — only board users can reopen. Both reopen paths (PATCH handler implicit reopen and POST comments explicit reopen) are guarded.
@@ -333,7 +337,7 @@ Agents follow a forward-only state machine. Terminal states (done, cancelled) ca
 
 ### Gate ordering
 
-Transition gate fires first (cheapest check), then delivery gate, then QA gate. This ensures invalid moves are rejected before checking work products or QA approval.
+Transition gate fires first (cheapest check), then delivery gate, then QA gate, then comment-required gate. This ensures invalid moves are rejected before checking work products, QA approval, or comment presence.
 
 ### Escape hatches (all gates)
 
@@ -346,6 +350,7 @@ Rejected transitions are logged in the activity log:
 - `issue.transition_blocked` — invalid agent state transition
 - `issue.delivery_gate_blocked` — missing work products
 - `issue.qa_gate_blocked` — missing QA approval
+- `issue.comment_required_blocked` — status/assignee change without comment
 
 ### Work product URL verification (PR #124)
 
@@ -380,6 +385,7 @@ Board users bypass all URL validation.
 6. `assertAgentTransition()` — status state machine
 7. `assertDeliveryGate()` — work product requirements
 8. `assertQAGate()` — peer QA approval
+9. `assertAgentCommentRequired()` — mandatory comment on status/assignee changes
 
 **Escape hatches:**
 - Board users bypass all agent-only gates
@@ -394,12 +400,15 @@ Board users bypass all URL validation.
 
 ### Key files
 
-- `server/src/routes/issues.ts` — `assertAgentTransition()`, `assertDeliveryGate()`, `assertQAGate()`, `assertAgentAssignmentPolicy()`, URL patterns, creation-time validation
+- `server/src/routes/issues.ts` — `assertAgentTransition()`, `assertDeliveryGate()`, `assertQAGate()`, `assertAgentAssignmentPolicy()`, `assertAgentCommentRequired()`, URL patterns, creation-time validation
 - `server/src/utils/agent-dispatchability.ts` — `isDispatchableAgent()` shared predicate
 - `server/src/__tests__/transition-gate.test.ts` — 12 transition gate tests
 - `server/src/__tests__/delivery-gate.test.ts` — 10 delivery gate tests (including URL verification)
 - `server/src/__tests__/qa-gate.test.ts` — 13 QA gate tests (including 3 self-QA prevention cases)
 - `server/src/__tests__/assignment-policy-gate.test.ts` — 16 assignment policy tests
+- `server/src/__tests__/comment-required-gate.test.ts` — 7 comment-required gate tests
+- `server/src/__tests__/agent-dispatchability.test.ts` — 8 dispatchability predicate tests
+- `server/src/__tests__/mention-agent-matching.test.ts` — 15 mention resolution tests
 - `server/src/__tests__/work-product-verification.test.ts` — 11 work product URL verification tests
 - `server/src/services/workspace-runtime.ts` — workspace ready comment
 - `server/src/onboarding-assets/default/AGENTS.md` — Code Delivery Protocol + QA Approval Protocol + Assignment Policy
@@ -450,6 +459,75 @@ gh run list --repo Viraforge/paperclip --workflow=pipeline-watchdog.yml --limit 
 ### Docker build speedup (PR #125)
 
 The `docker.yml` workflow previously built `linux/amd64,linux/arm64` — the ARM64 cross-compilation via QEMU took ~20 minutes. The VPS is x86_64 only, so ARM64 was dropped. Build time: ~25 min → ~5 min.
+
+---
+
+## @mention wakeup for multi-word agent names (PR #131)
+
+### The bug
+
+`findMentionedAgents()` in `server/src/services/issues.ts` used a regex `/\B@([^\s@,!?.]+)/g` that stops at whitespace. Users write `@qa-agent` (kebab-case), but the matching compared against `agent.name.toLowerCase()` which gives `"qa agent"` (spaces). These never match, so **13 of 27 agents with multi-word names could never be woken via @mention**.
+
+Previous fix attempts (commits `47449152`, `730a67bb`, `2735ef1f`) added HTML entity decoding (`normalizeAgentMentionToken`) but never addressed the kebab-vs-space mismatch.
+
+### The fix
+
+Wired the existing `normalizeAgentUrlKey()` from `@paperclipai/shared` (already used for URL slug generation) into `findMentionedAgents()` as a second-pass matcher:
+
+```typescript
+// Direct name match (handles single-word names like "CEO")
+if (tokens.has(agent.name.toLowerCase())) { resolved.add(agent.id); continue; }
+// Kebab-key match: @qa-agent resolves to "QA Agent" via normalizeAgentUrlKey
+const agentKey = normalizeAgentUrlKey(agent.name);
+if (agentKey && tokens.has(agentKey)) { resolved.add(agent.id); }
+```
+
+`normalizeAgentUrlKey` converts both `"QA Agent"` and `"qa-agent"` to `"qa-agent"` via `/[^a-z0-9]+/g` → hyphen replacement. This makes the token from the regex and the agent name converge to the same key.
+
+### Production verification
+
+Live-tested on production (2026-04-02): Comment `@release-manager` on DLD-1556 successfully triggered `issue_comment_mentioned` wakeup for the Release Manager agent within 24ms. Baseline was 0 prior mention wakeups.
+
+### Key files
+
+- `server/src/services/issues.ts` — `findMentionedAgents()` (the fix)
+- `packages/shared/src/agent-url-key.ts` — `normalizeAgentUrlKey()` (shared utility)
+- `server/src/__tests__/mention-agent-matching.test.ts` — 15 unit tests for mention resolution
+
+### Mention syntax reference
+
+| Syntax | Resolves to |
+|---|---|
+| `@ceo` | CEO (exact name match) |
+| `@qa-agent` | QA Agent (kebab-key match) |
+| `@senior-claude-code-engineer` | Senior Claude Code Engineer (kebab-key match) |
+| `@release-manager` | Release Manager (kebab-key match) |
+| `@nonexistent` | _(no match, silently ignored)_ |
+
+---
+
+## Adapter config field preservation (PR #131)
+
+### The bug
+
+Two gaps in the config persistence pipeline caused `dangerouslySkipPermissions` (and other operational fields) to be silently dropped from `claude_local` agents:
+
+1. **UI adapter type change**: `AgentConfigForm.tsx` only preserved 4 hardcoded `crossAdapterFields` when adapter type changed. Fields like `dangerouslySkipPermissions`, `maxTurnsPerRun`, `command`, `extraArgs`, `workspaceStrategy`, `workspaceRuntime` were silently dropped.
+2. **Server had no `claude_local` default backfill**: `applyCreateDefaultsByAdapterType()` applied `dangerouslyBypassApprovalsAndSandbox` for `codex_local` but did nothing for `claude_local`.
+
+### The fix
+
+**Server** (`server/src/routes/agents.ts`): Added `claude_local` block in `applyCreateDefaultsByAdapterType()` that sets `dangerouslySkipPermissions` to `DEFAULT_CLAUDE_LOCAL_SKIP_PERMISSIONS` (true) when the field is missing.
+
+**UI** (`ui/src/components/AgentConfigForm.tsx`): Expanded `crossAdapterFields` from 4 to 10 fields:
+```typescript
+const crossAdapterFields = [
+  "env", "cwd", "timeoutSec", "graceSec",
+  "dangerouslySkipPermissions", "maxTurnsPerRun",
+  "command", "extraArgs",
+  "workspaceStrategy", "workspaceRuntime",
+] as const;
+```
 
 ---
 

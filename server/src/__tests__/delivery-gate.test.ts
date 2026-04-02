@@ -7,9 +7,11 @@ import { errorHandler } from "../middleware/index.js";
 const mockIssueService = vi.hoisted(() => ({
   getById: vi.fn(),
   update: vi.fn(),
+  addComment: vi.fn(),
   assertCheckoutOwner: vi.fn(),
   getCommentCursor: vi.fn(),
   listComments: vi.fn(),
+  findMentionedAgents: vi.fn(),
 }));
 
 const mockWorkProductService = vi.hoisted(() => ({
@@ -139,6 +141,8 @@ describe("delivery gate", () => {
     mockIssueService.listComments.mockResolvedValue([
       { body: "QA: PASS", authorAgentId: "qa-agent-1", authorUserId: null },
     ]);
+    mockIssueService.addComment.mockResolvedValue({ id: "comment-1", body: "test" });
+    mockIssueService.findMentionedAgents.mockResolvedValue([]);
   });
 
   it("agent → in_review on code issue with no work products → 422", async () => {
@@ -210,7 +214,7 @@ describe("delivery gate", () => {
     const app = createAgentApp();
     const res = await request(app)
       .patch(`/api/issues/${nonCodeIssue.id}`)
-      .send({ status: "done" });
+      .send({ status: "done", comment: "Done" });
 
     expect(res.status).toBe(200);
   });
@@ -225,7 +229,7 @@ describe("delivery gate", () => {
     const app = createAgentApp();
     const res = await request(app)
       .patch(`/api/issues/${codeIssue.id}`)
-      .send({ status: "in_review" });
+      .send({ status: "in_review", comment: "Ready for review" });
 
     expect(res.status).toBe(200);
   });
@@ -240,7 +244,7 @@ describe("delivery gate", () => {
     const app = createAgentApp();
     const res = await request(app)
       .patch(`/api/issues/${codeIssue.id}`)
-      .send({ status: "done" });
+      .send({ status: "done", comment: "Merged and complete" });
 
     expect(res.status).toBe(200);
   });

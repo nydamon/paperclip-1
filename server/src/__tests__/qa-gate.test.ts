@@ -7,9 +7,11 @@ import { errorHandler } from "../middleware/index.js";
 const mockIssueService = vi.hoisted(() => ({
   getById: vi.fn(),
   update: vi.fn(),
+  addComment: vi.fn(),
   assertCheckoutOwner: vi.fn(),
   getCommentCursor: vi.fn(),
   listComments: vi.fn(),
+  findMentionedAgents: vi.fn(),
 }));
 
 const mockWorkProductService = vi.hoisted(() => ({
@@ -140,6 +142,8 @@ describe("qa gate", () => {
     });
     // Default: delivery gate passes (valid PR exists)
     mockWorkProductService.listForIssue.mockResolvedValue([validPR]);
+    mockIssueService.addComment.mockResolvedValue({ id: "comment-1", body: "test" });
+    mockIssueService.findMentionedAgents.mockResolvedValue([]);
   });
 
   it("agent → done, no comments → 422", async () => {
@@ -165,7 +169,7 @@ describe("qa gate", () => {
     const app = createAgentApp();
     const res = await request(app)
       .patch(`/api/issues/${codeIssue.id}`)
-      .send({ status: "done" });
+      .send({ status: "done", comment: "Marking done" });
 
     expect(res.status).toBe(200);
   });
@@ -207,7 +211,7 @@ describe("qa gate", () => {
     const app = createAgentApp();
     const res = await request(app)
       .patch(`/api/issues/${nonCodeIssue.id}`)
-      .send({ status: "done" });
+      .send({ status: "done", comment: "Done" });
 
     expect(res.status).toBe(200);
   });
@@ -223,7 +227,7 @@ describe("qa gate", () => {
     const app = createAgentApp();
     const res = await request(app)
       .patch(`/api/issues/${codeIssue.id}`)
-      .send({ status: "in_review" });
+      .send({ status: "in_review", comment: "Ready for review" });
 
     expect(res.status).toBe(200);
   });
@@ -238,7 +242,7 @@ describe("qa gate", () => {
     const app = createAgentApp();
     const res = await request(app)
       .patch(`/api/issues/${codeIssue.id}`)
-      .send({ status: "done" });
+      .send({ status: "done", comment: "Marking done" });
 
     expect(res.status).toBe(200);
   });
@@ -253,7 +257,7 @@ describe("qa gate", () => {
     const app = createAgentApp();
     const res = await request(app)
       .patch(`/api/issues/${codeIssue.id}`)
-      .send({ status: "done" });
+      .send({ status: "done", comment: "Marking done" });
 
     expect(res.status).toBe(200);
   });
@@ -310,7 +314,7 @@ describe("qa gate", () => {
     const app = createAgentApp();
     const res = await request(app)
       .patch(`/api/issues/${codeIssue.id}`)
-      .send({ status: "done" });
+      .send({ status: "done", comment: "Marking done" });
 
     expect(res.status).toBe(200);
   });
@@ -325,7 +329,7 @@ describe("qa gate", () => {
     const app = createAgentApp();
     const res = await request(app)
       .patch(`/api/issues/${codeIssue.id}`)
-      .send({ status: "done" });
+      .send({ status: "done", comment: "Marking done" });
 
     expect(res.status).toBe(200);
   });
