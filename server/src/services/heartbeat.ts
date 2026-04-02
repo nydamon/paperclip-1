@@ -42,6 +42,7 @@ import {
 import { issueService } from "./issues.js";
 import { executionWorkspaceService } from "./execution-workspaces.js";
 import { workspaceOperationService } from "./workspace-operations.js";
+import { listRecoverableDispatchGaps } from "./dispatch-gaps.js";
 import {
   buildExecutionWorkspaceAdapterConfig,
   gateProjectExecutionWorkspacePolicy,
@@ -779,6 +780,40 @@ function resolveNextSessionState(input: {
     displayId,
     legacySessionId,
   };
+}
+
+function shouldTreatHermesAbortAsSuccess(adapterResult: AdapterExecutionResult) {
+  if (adapterResult.timedOut) return false;
+  if (adapterResult.errorMessage) return false;
+  if (adapterResult.exitCode !== 134) return false;
+  const hasSummary = readNonEmptyString(adapterResult.summary) != null;
+  const hasSession =
+    readNonEmptyString(adapterResult.sessionDisplayId) != null ||
+    readNonEmptyString(adapterResult.sessionId) != null ||
+    Object.keys(parseObject(adapterResult.sessionParams)).length > 0;
+  return hasSummary && hasSession;
+}
+
+export function resolveHeartbeatRunOutcome(input: {
+  adapterType: string;
+  latestRunStatus: string | null | undefined;
+  adapterResult: AdapterExecutionResult;
+}): "succeeded" | "failed" | "cancelled" | "timed_out" {
+  const { adapterType, latestRunStatus, adapterResult } = input;
+  if (latestRunStatus === "cancelled") {
+    return "cancelled";
+  }
+  if (adapterResult.timedOut) {
+    return "timed_out";
+  }
+  const normalizedExitCode =
+    adapterType === "hermes_local" && shouldTreatHermesAbortAsSuccess(adapterResult)
+      ? 0
+      : (adapterResult.exitCode ?? 0);
+  if (normalizedExitCode === 0 && !adapterResult.errorMessage) {
+    return "succeeded";
+  }
+  return "failed";
 }
 
 export function heartbeatService(db: Db) {
@@ -2684,17 +2719,12 @@ export function heartbeatService(db: Db) {
       });
       const normalizedUsage = sessionUsageResolution.normalizedUsage;
 
-      let outcome: "succeeded" | "failed" | "cancelled" | "timed_out";
       const latestRun = await getRun(run.id);
-      if (latestRun?.status === "cancelled") {
-        outcome = "cancelled";
-      } else if (adapterResult.timedOut) {
-        outcome = "timed_out";
-      } else if ((adapterResult.exitCode ?? 0) === 0 && !adapterResult.errorMessage) {
-        outcome = "succeeded";
-      } else {
-        outcome = "failed";
-      }
+      const outcome = resolveHeartbeatRunOutcome({
+        adapterType: agent.adapterType,
+        latestRunStatus: latestRun?.status ?? null,
+        adapterResult,
+      });
 
       let logSummary: { bytes: number; sha256?: string; compressed: boolean } | null = null;
       if (handle) {
@@ -3940,6 +3970,25 @@ export function heartbeatService(db: Db) {
         else skipped += 1;
       }
 
+      const recoverableGaps = await listRecoverableDispatchGaps(db);
+      for (const gap of recoverableGaps) {
+        const run = await enqueueWakeup(gap.assigneeAgentId, {
+          source: "timer",
+          triggerDetail: "system",
+          reason: "idle_issue_dispatch_gap",
+          requestedByActorType: "system",
+          requestedByActorId: "heartbeat_scheduler",
+          contextSnapshot: {
+            issueId: gap.issueId,
+            source: "scheduler",
+            reason: "idle_issue_dispatch_gap",
+            now: now.toISOString(),
+          },
+        });
+        if (run) enqueued += 1;
+        else skipped += 1;
+      }
+
       return { checked, enqueued, skipped };
     },
 
@@ -4032,6 +4081,90 @@ export function heartbeatService(db: Db) {
       // No-op stub: orphaned workspace process reaping is not yet implemented.
       // Workspace runtime services are cleaned up via releaseRuntimeServicesForRun.
       return { reaped: 0 };
+    },
+
+    /**
+     * Activation watchdog: find in_progress/in_review issues assigned to a healthy agent
+     * that never gained an executionRunId within the SLA window, then fire a wakeup.
+     * Increments activationRetriggerCount per retrigger; escalates once maxRetriggers is reached.
+     */
+    async sweepUnpickedAssignments(opts: {
+      slaWindowMs?: number;
+      maxRetriggers?: number;
+      now?: Date;
+    } = {}): Promise<{ retriggered: number; escalated: number }> {
+      const {
+        slaWindowMs = 8 * 60 * 1000,
+        maxRetriggers = 1,
+        now = new Date(),
+      } = opts;
+
+      const cutoff = new Date(now.getTime() - slaWindowMs);
+
+      const candidates = await db
+        .select()
+        .from(issues)
+        .where(
+          and(
+            inArray(issues.status, ["in_progress", "in_review"]),
+            isNotNull(issues.assigneeAgentId),
+            isNull(issues.executionRunId),
+            isNull(issues.checkoutRunId),
+            lte(issues.updatedAt, cutoff),
+          ),
+        );
+
+      let retriggered = 0;
+      let escalated = 0;
+
+      for (const issue of candidates) {
+        if (!issue.assigneeAgentId) continue;
+
+        const agent = await getAgent(issue.assigneeAgentId);
+        if (!agent) continue;
+        if (
+          agent.status === "paused" ||
+          agent.status === "terminated" ||
+          agent.status === "pending_approval"
+        ) continue;
+
+        const retriggerCount = issue.activationRetriggerCount ?? 0;
+
+        if (retriggerCount >= maxRetriggers) {
+          escalated += 1;
+          logger.warn(
+            { issueId: issue.id, assigneeAgentId: issue.assigneeAgentId, retriggerCount },
+            "activation watchdog: issue exceeded max retriggers, escalating",
+          );
+          continue;
+        }
+
+        await db
+          .update(issues)
+          .set({ activationRetriggerCount: retriggerCount + 1, updatedAt: now })
+          .where(and(eq(issues.id, issue.id), isNull(issues.executionRunId)));
+
+        await enqueueWakeup(issue.assigneeAgentId, {
+          source: "automation",
+          triggerDetail: "system",
+          reason: "activation_watchdog",
+          requestedByActorType: "system",
+          requestedByActorId: "activation_watchdog",
+          contextSnapshot: {
+            issueId: issue.id,
+            source: "activation_watchdog",
+            wakeSource: "activation_watchdog",
+          },
+        });
+
+        logger.info(
+          { issueId: issue.id, assigneeAgentId: issue.assigneeAgentId, retriggerCount: retriggerCount + 1 },
+          "activation watchdog: retriggered unpicked assignment",
+        );
+        retriggered += 1;
+      }
+
+      return { retriggered, escalated };
     },
 
     /**

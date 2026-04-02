@@ -579,6 +579,19 @@ export async function startServer(): Promise<StartedServer> {
         .catch((err) => {
           logger.error({ err }, "watchdog: timeoutStaleRuns failed");
         });
+
+      // Activation watchdog: retrigger in_progress/in_review issues that never gained
+      // an executionRunId within the SLA window.
+      void heartbeat
+        .sweepUnpickedAssignments({ slaWindowMs: 8 * 60 * 1000, maxRetriggers: 1 })
+        .then((result) => {
+          if (result.retriggered > 0 || result.escalated > 0) {
+            logger.info({ ...result }, "activation watchdog: retriggered or escalated");
+          }
+        })
+        .catch((err) => {
+          logger.error({ err }, "activation watchdog sweep failed");
+        });
     }, config.heartbeatSchedulerIntervalMs);
   }
   

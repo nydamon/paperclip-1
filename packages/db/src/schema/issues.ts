@@ -51,6 +51,7 @@ export const issues = pgTable(
       .references((): AnyPgColumn => executionWorkspaces.id, { onDelete: "set null" }),
     executionWorkspacePreference: text("execution_workspace_preference"),
     executionWorkspaceSettings: jsonb("execution_workspace_settings").$type<Record<string, unknown>>(),
+    activationRetriggerCount: integer("activation_retrigger_count").notNull().default(0),
     startedAt: timestamp("started_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),
     processLostRetryAt: timestamp("process_lost_retry_at", { withTimezone: true }),

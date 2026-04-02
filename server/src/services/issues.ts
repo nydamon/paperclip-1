@@ -1096,6 +1096,7 @@ export function issueService(db: Db) {
           assigneeUserId: null,
           checkoutRunId,
           executionRunId: checkoutRunId,
+          activationRetriggerCount: 0,
           status: "in_progress",
           startedAt: now,
           updatedAt: now,
