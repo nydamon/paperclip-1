@@ -149,6 +149,8 @@ If you are asked to install a skill for the company or an agent you MUST read:
 - **Always set `parentId`** on subtasks (and `goalId` unless you're CEO/manager creating top-level work).
 - **Never cancel cross-team tasks.** Reassign to your manager with a comment.
 - **Always update blocked issues explicitly.** If blocked, PATCH status to `blocked` with a blocker comment before exiting, then escalate. On subsequent heartbeats, do NOT repeat the same blocked comment — see blocked-task dedup in Step 4.
+- **Do not leave failed implementation work blocked under QA ownership.** If you are QA/validation and the next action is engineering or devops work, reassign the child lane to the original implementer when known, otherwise to the correct active engineering/devops owner, and return it to an executable state (normally `in_progress`).
+- **Parent validation lanes may stay with QA; child implementation lanes may not.** Keep parent validation/control lanes with QA when appropriate, but return failing child implementation lanes to the next executable owner.
 - **@-mentions** (`@AgentName` in comments) trigger heartbeats — use sparingly, they cost budget.
 - **Budget**: auto-paused at 100%. Above 80%, focus on critical tasks only.
 - **Escalate** via `chainOfCommand` when stuck. Reassign to manager or create a task for them.

@@ -23,7 +23,9 @@ Code issues require QA approval before they can be marked `done`:
 
 ## Assignment Policy
 
-Direct assignment is the primary handoff path; comments/@mentions are advisory only.
+Direct assignment is the primary handoff path; comments and @mentions are advisory only and do not replace reassignment.
+
+If you are not the next owner who can execute the next action, do not retain the issue.
 
 - You may only reassign issues you currently own
 - Engineers hand off to QA when moving to `in_review`
@@ -31,3 +33,40 @@ Direct assignment is the primary handoff path; comments/@mentions are advisory o
 - Never assign to agents you haven't confirmed are active
 - CEO/CTO may reassign broadly for recovery and stranded-lane cleanup
 - Same-role lateral handoffs (engineer → engineer) are not permitted — route through a control-plane actor
+
+### Required rule for QA-owned implementation review
+
+If a QA or validation run finds a defect whose next action is engineering or devops work:
+
+1. Do **not** leave the implementation issue blocked under QA ownership.
+2. Reassign the issue to the original implementing engineer/devops owner when known.
+3. If the original implementer is unavailable, reassign to the correct active engineering/devops owner and say so explicitly in the comment.
+4. Move the issue back to the appropriate executable state, normally `in_progress`, when implementation work is required.
+5. Leave a concise FAIL comment that includes:
+   - the failing behavior
+   - the key evidence/artifacts
+   - the exact fix required
+   - the owner the issue is being returned to
+
+### When QA may retain ownership
+
+QA may retain ownership only when:
+
+- the issue is a parent validation/control lane rather than an implementation child lane, or
+- the blocker is truly external to engineering execution (for example: missing credentials, unavailable environment, board decision required, third-party outage, or another non-engineering dependency)
+
+### Blocked-state rule
+
+Use `blocked` only for true external blockers.
+Do **not** use `blocked` to park implementation work that should be actively returned to engineering.
+
+### Parent/child distinction
+
+- Parent validation lanes may remain with QA.
+- Failed child implementation lanes must be returned to engineering/devops when the next action is implementation work.
+
+### Routing safety
+
+- Do not assign to paused, errored, or otherwise non-dispatchable agents.
+- Do not use same-role lateral handoffs unless a control-plane actor explicitly directs it.
+- Follow the platform assignment policy and allowed role handoff matrix exactly.

@@ -77,6 +77,8 @@ If you change schema/API behavior, update all impacted layers:
 - QA approval gate: code issues require a `QA: PASS` comment before moving to done
 - Forward-only issue transitions are enforced; do not invent ad hoc backward resets to force work into motion
 - Direct assignment is the primary control path for waking agents; do not rely on soft `@mention` choreography as the main handoff mechanism
+- If a QA or validation run finds an implementation defect, the failing child lane must be reassigned back to an executable engineering/devops owner; do not leave failed implementation work blocked under QA ownership
+- Parent validation/control lanes may remain with QA, but child implementation lanes must move to the next executable owner
 - Merged is not validated; deployed is not board-ready; use implemented / deployed / validated / board-ready language precisely
 - For code and delivery issues entering `in_review`, include a single structured review handoff comment containing explicit `Summary:`, `Branch:`, `Commit:`, `PR:`, `Checks:`, `Reviewer:`, and `Caveats:` fields
 

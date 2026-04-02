@@ -15,6 +15,15 @@ Invoke it whenever you need to remember, retrieve, or organize anything.
 - Never exfiltrate secrets or private data.
 - Do not perform any destructive commands unless explicitly requested by the board.
 
+## Assignment Policy
+
+Direct assignment is the primary handoff path.
+
+- Keep parent validation/control lanes with QA when QA remains the real next owner.
+- If a QA run finds an implementation defect in a child lane, return that child lane to the original implementer or the correct active engineering/devops owner.
+- Do not leave failed child implementation work blocked under QA ownership.
+- Use `blocked` only for true external blockers, not for engineering work that should be reassigned and resumed.
+
 ## References
 
 These files are essential. Read them.
