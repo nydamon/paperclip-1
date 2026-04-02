@@ -579,6 +579,18 @@ export async function startServer(): Promise<StartedServer> {
         .catch((err) => {
           logger.error({ err }, "stale execution lock sweep failed");
         });
+
+      // Retrigger unpicked assignments past the SLA window.
+      void heartbeat
+        .sweepUnpickedAssignments()
+        .then((result) => {
+          if (result.retriggered > 0) {
+            logger.info({ ...result }, "retriggered unpicked assignments");
+          }
+        })
+        .catch((err) => {
+          logger.error({ err }, "unpicked assignment sweep failed");
+        });
     }, config.heartbeatSchedulerIntervalMs);
   }
   

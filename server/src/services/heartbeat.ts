@@ -61,6 +61,7 @@ import {
   type SessionCompactionPolicy,
 } from "@paperclipai/adapter-utils";
 import { assessIssueDispositionWarning } from "./issue-disposition-watchdog.js";
+import { isDispatchableAgent } from "../utils/agent-dispatchability.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const HEARTBEAT_MAX_CONCURRENT_RUNS_DEFAULT = 1;
@@ -4037,6 +4038,79 @@ export function heartbeatService(db: Db) {
         logger.info({ count: enqueued.length }, "enqueued process_lost retries");
       }
       return { enqueued: enqueued.length };
+    },
+
+    async sweepUnpickedAssignments() {
+      const UNPICKED_SLA_MS = 8 * 60 * 1000; // 8 minutes
+      const MAX_RETRIGGERS = 1;
+      const now = new Date();
+      const cutoff = new Date(now.getTime() - UNPICKED_SLA_MS);
+
+      const candidates = await db
+        .select({
+          id: issues.id,
+          assigneeAgentId: issues.assigneeAgentId,
+          activationRetriggerCount: issues.activationRetriggerCount,
+        })
+        .from(issues)
+        .where(
+          and(
+            inArray(issues.status, ["todo", "in_progress", "in_review"]),
+            isNotNull(issues.assigneeAgentId),
+            isNull(issues.executionRunId),
+            isNull(issues.executionLockedAt),
+            isNull(issues.checkoutRunId),
+            lte(issues.updatedAt, cutoff),
+          ),
+        );
+
+      const retriggered: string[] = [];
+      for (const issue of candidates) {
+        if (!issue.assigneeAgentId) continue;
+        if (issue.activationRetriggerCount >= MAX_RETRIGGERS) continue;
+
+        const [agent] = await db
+          .select({ status: agents.status, pauseReason: agents.pauseReason })
+          .from(agents)
+          .where(eq(agents.id, issue.assigneeAgentId))
+          .limit(1);
+
+        if (!isDispatchableAgent(agent)) {
+          logger.warn(
+            { issueId: issue.id, agentId: issue.assigneeAgentId, agentStatus: agent?.status },
+            "unpicked assignment on non-dispatchable agent — skipping retrigger",
+          );
+          continue;
+        }
+
+        await db
+          .update(issues)
+          .set({
+            activationRetriggerCount: issue.activationRetriggerCount + 1,
+            updatedAt: now,
+          })
+          .where(eq(issues.id, issue.id));
+
+        retriggered.push(issue.id);
+
+        try {
+          await enqueueWakeup(issue.assigneeAgentId, {
+            source: "automation",
+            triggerDetail: "system",
+            reason: "unpicked_assignment_retrigger",
+            requestedByActorType: "system",
+            requestedByActorId: "heartbeat_scheduler",
+            contextSnapshot: { issueId: issue.id, source: "unpicked_assignment_retrigger" },
+          });
+        } catch (err) {
+          logger.error({ err, issueId: issue.id, agentId: issue.assigneeAgentId }, "failed to enqueue wakeup for unpicked assignment retrigger");
+        }
+      }
+
+      if (retriggered.length > 0) {
+        logger.info({ count: retriggered.length, issueIds: retriggered }, "retriggered unpicked assignments");
+      }
+      return { retriggered: retriggered.length };
     },
 
     async reapOrphanedWorkspaceProcesses() {

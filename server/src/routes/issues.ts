@@ -1292,6 +1292,12 @@ export function issueRoutes(db: Db, storage: StorageService) {
       return;
     }
 
+    // Reset activation retrigger counter when assignee changes so the new
+    // assignee gets a fresh SLA window for pickup.
+    if (assigneeWillChange) {
+      (updateFields as Record<string, unknown>).activationRetriggerCount = 0;
+    }
+
     let issue;
     try {
       issue = await svc.update(id, updateFields);

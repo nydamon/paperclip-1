@@ -433,6 +433,29 @@ UPDATE issues SET execution_run_id = NULL WHERE identifier = 'DLD-XXXX';
 
 ---
 
+## Unpicked assignment activation watchdog
+
+`sweepUnpickedAssignments()` in `server/src/services/heartbeat.ts` runs on every scheduler tick (~30s) via `server/src/index.ts`. It detects issues assigned to an agent but never picked up (no `executionRunId`, no `executionLockedAt`, no `checkoutRunId`) past an 8-minute SLA window, and retriggers dispatch.
+
+**Behavior:**
+- Scans issues in `todo`, `in_progress`, or `in_review` status
+- Checks `updatedAt` < now - 8 minutes (SLA window)
+- Verifies assignee agent is dispatchable (not paused/error/terminated/pending_approval)
+- Increments `activation_retrigger_count` and enqueues a wakeup with reason `unpicked_assignment_retrigger`
+- Maximum 1 retrigger per assignment — after that, the issue stays stranded (requires manual intervention or reassignment)
+- Counter resets to 0 when the assignee changes (via PATCH `/issues/:id`)
+- Non-dispatchable agents are skipped with a `warn` log
+
+**Key files:**
+- `server/src/services/heartbeat.ts` — `sweepUnpickedAssignments()` implementation
+- `server/src/index.ts` — scheduler wiring
+- `server/src/routes/issues.ts` — `activationRetriggerCount` reset on assignee change
+- `packages/db/src/schema/issues.ts` — `activationRetriggerCount` column
+- `packages/db/src/migrations/0045_activation_retrigger.sql` — migration
+- `server/src/__tests__/unpicked-assignment-sweep.test.ts` — 5 unit tests
+
+---
+
 ## No-op PATCH short-circuit
 
 The PATCH `/issues/:id` handler detects when all fields in the request body already match the existing issue values and there is no comment or reopen request. In that case it returns the existing issue immediately without writing to the database, logging activity, or triggering agent wakeups.
