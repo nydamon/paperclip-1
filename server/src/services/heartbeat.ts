@@ -6,12 +6,14 @@ import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lte, sql } from "dr
 import type { Db } from "@paperclipai/db";
 import type { BillingType } from "@paperclipai/shared";
 import {
+  activityLog,
   agents,
   agentRuntimeState,
   agentTaskSessions,
   agentWakeupRequests,
   heartbeatRunEvents,
   heartbeatRuns,
+  issueComments,
   issues,
   projects,
   projectWorkspaces,
@@ -19,6 +21,7 @@ import {
 import { conflict, notFound } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { publishLiveEvent } from "./live-events.js";
+import { logActivity } from "./activity-log.js";
 import { getRunLogStore, type RunLogHandle } from "./run-log-store.js";
 import { getServerAdapter, runningProcesses } from "../adapters/index.js";
 import type { AdapterExecutionResult, AdapterInvocationMeta, AdapterSessionCodec, UsageSummary } from "../adapters/index.js";
@@ -57,6 +60,7 @@ import {
   resolveSessionCompactionPolicy,
   type SessionCompactionPolicy,
 } from "@paperclipai/adapter-utils";
+import { assessIssueDispositionWarning } from "./issue-disposition-watchdog.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const HEARTBEAT_MAX_CONCURRENT_RUNS_DEFAULT = 1;
@@ -1520,6 +1524,102 @@ export function heartbeatService(db: Db) {
     return updated;
   }
 
+  async function observeIssueDispositionOutcome(
+    run: typeof heartbeatRuns.$inferSelect,
+    outcome: "succeeded" | "failed" | "cancelled" | "timed_out",
+  ) {
+    const contextSnapshot = parseObject(run.contextSnapshot);
+    const issueId = readNonEmptyString(contextSnapshot.issueId);
+    if (!issueId) return;
+
+    const issue = await db
+      .select({
+        id: issues.id,
+        identifier: issues.identifier,
+        title: issues.title,
+        status: issues.status,
+        assigneeAgentId: issues.assigneeAgentId,
+      })
+      .from(issues)
+      .where(eq(issues.id, issueId))
+      .then((rows) => rows[0] ?? null);
+    if (!issue) return;
+
+    const latestAgentComment = await db
+      .select({
+        id: issueComments.id,
+        createdAt: issueComments.createdAt,
+      })
+      .from(issueComments)
+      .where(and(
+        eq(issueComments.companyId, run.companyId),
+        eq(issueComments.issueId, issue.id),
+        eq(issueComments.authorAgentId, run.agentId),
+        gt(issueComments.createdAt, run.startedAt ?? run.createdAt),
+      ))
+      .orderBy(desc(issueComments.createdAt))
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+
+    const assessment = assessIssueDispositionWarning({
+      outcome,
+      issueStatus: issue.status,
+      issueAssigneeAgentId: issue.assigneeAgentId,
+      runAgentId: run.agentId,
+      hasAgentDispositionComment: latestAgentComment != null,
+    });
+    if (!assessment.shouldWarn) return;
+
+    const eventMessage = `Observe-only watchdog: run succeeded but ${issue.identifier ?? issue.id} has no assignee disposition comment after pickup; board-visible issue truth may be stale`;
+    await appendRunEvent(run, await nextRunEventSeq(run.id), {
+      eventType: "observation",
+      stream: "system",
+      level: "warn",
+      message: eventMessage,
+      payload: {
+        issueId: issue.id,
+        identifier: issue.identifier,
+        issueStatus: issue.status,
+        warningType: assessment.warningType,
+      },
+    });
+
+    const alreadyLogged = await db
+      .select({ id: activityLog.id })
+      .from(activityLog)
+      .where(and(
+        eq(activityLog.companyId, run.companyId),
+        eq(activityLog.entityType, "issue"),
+        eq(activityLog.entityId, issue.id),
+        eq(activityLog.action, "issue.disposition_warning"),
+        eq(activityLog.runId, run.id),
+      ))
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+    if (alreadyLogged) return;
+
+    await logActivity(db, {
+      companyId: run.companyId,
+      actorType: "system",
+      actorId: "heartbeat_disposition_watchdog",
+      action: "issue.disposition_warning",
+      entityType: "issue",
+      entityId: issue.id,
+      agentId: run.agentId,
+      runId: run.id,
+      details: {
+        identifier: issue.identifier,
+        issueTitle: issue.title,
+        status: issue.status,
+        warningType: assessment.warningType,
+        observedAt: new Date().toISOString(),
+        runStartedAt: run.startedAt ? new Date(run.startedAt).toISOString() : null,
+        runFinishedAt: run.finishedAt ? new Date(run.finishedAt).toISOString() : null,
+        message: eventMessage,
+      },
+    });
+  }
+
   async function enqueueProcessLossRetry(
     run: typeof heartbeatRuns.$inferSelect,
     agent: typeof agents.$inferSelect,
@@ -2703,6 +2803,7 @@ export function heartbeatService(db: Db) {
           },
         });
         await releaseIssueExecutionAndPromote(finalizedRun);
+        await observeIssueDispositionOutcome(finalizedRun, outcome);
       }
 
       if (finalizedRun) {

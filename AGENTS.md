@@ -82,10 +82,19 @@ If you change schema/API behavior, update all impacted layers:
 - Merged is not validated; deployed is not board-ready; use implemented / deployed / validated / board-ready language precisely
 - For code and delivery issues entering `in_review`, include a single structured review handoff comment containing explicit `Summary:`, `Branch:`, `Commit:`, `PR:`, `Checks:`, `Reviewer:`, and `Caveats:` fields
 
-4. Do not replace strategic docs wholesale unless asked.
+4. Operational control-plane rules for agent-executed issue work.
+- Direct assignment + explicit state transition is the primary control path. `@mentions` and comments are advisory wake signals, not sufficient proof of pickup.
+- Assignment alone is not progress. A task is only truly active when it has a dispatchable owner, a non-terminal executable state, and a fresh execution/adoption signal.
+- When a board/Hermes/manager comment asks a direct question or gives explicit branches, the assignee must answer that instruction explicitly in the issue thread before ending the run.
+- Critical runs must leave a short disposition comment that states: current branch/decision, recommended status, exact blocker or evidence, and next owner/next step.
+- If an issue remains `blocked`, the comment must name the precise current blocker (for example deploy dependency, missing credential, failing runtime, or external decision). Do not leave `blocked` with stale or implied reasons.
+- A green run is not enough. A run is incomplete if it succeeds technically but does not update the board-visible issue truth.
+- Use state language precisely: `implemented`, `deployed`, `validated`, and `board-ready` are different claims and must not be collapsed.
+
+5. Do not replace strategic docs wholesale unless asked.
 Prefer additive updates. Keep `doc/SPEC.md` and `doc/SPEC-implementation.md` aligned.
 
-5. Keep plan docs dated and centralized.
+6. Keep plan docs dated and centralized.
 New plan documents belong in `doc/plans/` and should use `YYYY-MM-DD-slug.md` filenames.
 
 ## 6. Database Change Workflow
