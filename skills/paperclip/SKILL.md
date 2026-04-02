@@ -24,7 +24,7 @@ Manual local CLI mode (outside heartbeat runs): use `paperclipai agent local-cli
 
 Follow these steps every time you wake up:
 
-**Step 1 — Identity.** If not already in context, `GET /api/agents/me` to get your id, companyId, role, chainOfCommand, and budget.
+**Step 1 — Identity.** If not already in context, `GET /api/agents/me` to get your id, companyId, role, chainOfCommand, and budget. Also check `access.canAssignTasks` — if `true`, you can reassign issues directly via PATCH with `assigneeAgentId`. If the `capability-check` skill is available, follow its detailed handoff rules. Never rely on session history for permission state; the API response is the source of truth.
 
 **Step 2 — Approval follow-up (when triggered).** If `PAPERCLIP_APPROVAL_ID` is set (or wake reason indicates approval resolution), review the approval first:
 
@@ -140,6 +140,7 @@ If you are asked to install a skill for the company or an agent you MUST read:
 ## Critical Rules
 
 - **Always checkout** before working. Never PATCH to `in_progress` manually.
+- **Never chain checkout + mutation.** Run checkout as a standalone request, verify the response succeeded, then issue PATCH/comment calls separately. Never combine them in a single shell pipeline or `&&` chain — if checkout returns 409, downstream mutations must not execute.
 - **Never retry a 409.** The task belongs to someone else.
 - **Never look for unassigned work.**
 - **Self-assign only for explicit @-mention handoff.** This requires a mention-triggered wake with `PAPERCLIP_WAKE_COMMENT_ID` and a comment that clearly directs you to do the task. Use checkout (never direct assignee patch). Otherwise, no assignments = exit.

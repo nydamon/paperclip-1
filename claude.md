@@ -443,6 +443,42 @@ This prevents agents (especially the CEO) from polluting the activity log with r
 
 ---
 
+## Auto-assign from @mention on `in_review` transition
+
+When an agent transitions an issue to `in_review` and includes a comment with an `@mention` of another agent but **omits `assigneeAgentId`** from the PATCH body, the server auto-infers the assignment from the mentioned agent. This prevents the common pattern where agents `@mention` a QA agent for review handoff but forget to set `assigneeAgentId`, leaving the issue assigned to themselves and stalling the pipeline.
+
+**Behavior:**
+- Only fires for agent actors (board users bypass)
+- Only fires on `status: "in_review"` transitions
+- Only fires when `assigneeAgentId` is absent from the request body
+- Picks the first mentioned agent that isn't the current actor
+- The inferred `assigneeAgentId` flows through all normal gates (assignment policy, dispatchability, etc.)
+- Logged at `info` level: `"auto-inferred assigneeAgentId from @mention in in_review transition"`
+
+**Location:** `server/src/routes/issues.ts`, before `assigneeWillChange` computation.
+
+---
+
+## Capability-check bundled skill
+
+Bundled skill at `skills/capability-check/SKILL.md` that directs agents to read ground-truth permissions from `GET /api/agents/me` (`access.canAssignTasks`, `access.grants`) every heartbeat, overriding stale session history that caused self-censoring.
+
+**Problem solved:** Agents were refusing to use `tasks:assign` permission because their session history or corrections.md contained old "Missing permission" entries from before the permission was granted. They would post "blocked on tasks:assign" even though the server would accept the request.
+
+**How it works:**
+- Agents check `access.canAssignTasks` from the `/api/agents/me` response (already returned by `buildAgentAccessState()`)
+- If `true`: must PATCH `assigneeAgentId` directly — no escalation, no workarounds
+- If `false`: use @mention + escalation to manager
+- Stale history override: any session-history entries about "tasks:assign denied/blocked/missing" are explicitly marked as potentially stale and must be verified against the live API
+
+**Integration:** The paperclip skill's Step 1 (Identity) now references `access.canAssignTasks` and points to this skill for detailed handoff rules.
+
+**Key files:**
+- `skills/capability-check/SKILL.md` — the skill
+- `skills/paperclip/SKILL.md` — Step 1 updated to reference capability checking
+
+---
+
 ## Pipeline watchdog (observe-only)
 
 External safety layer that detects dispatch anomalies, stranded assignments, and RTAA categorization drift. Runs every 15 minutes via GitHub Actions. Does **not** mutate state — observe and report only.
