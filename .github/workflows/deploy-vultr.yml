@@ -179,6 +179,12 @@ jobs:
           ssh -F "$HOME/.ssh/config" \
             vultr-deploy \
             "set -euo pipefail
+            # Stop edge first to cleanly release host port 80 before recreating.
+            # Without this explicit stop, docker-proxy may still hold the port when
+            # the new edge container tries to bind it, causing 'address already in use'.
+            docker compose --project-name paperclip --env-file '$VULTR_ENV_FILE' \
+              -f '$VULTR_RELEASE_DIR/docker-compose.vps.yml' \
+              stop edge || true
             PAPERCLIP_SERVER_IMAGE='$PAPERCLIP_SERVER_IMAGE' \
             docker compose --project-name paperclip --env-file '$VULTR_ENV_FILE' \
               -f '$VULTR_RELEASE_DIR/docker-compose.vps.yml' \
