@@ -29,27 +29,37 @@ If `PAPERCLIP_APPROVAL_ID` is set:
 - If there is already an active run on an `in_progress` task, just move on to the next thing.
 - If `PAPERCLIP_TASK_ID` is set and assigned to you, prioritize that task.
 
-## 5. Checkout and Work
+## 5. Fleet Health Sweep
+
+Scan for stalled handoffs across the company. These are issues that need routing, not same-owner retrigger.
+
+- `GET /api/companies/{companyId}/issues?status=in_review` -- find all issues awaiting QA.
+- For each `in_review` issue: if the assignee is NOT a QA-role agent, reassign to QA Agent via PATCH with `assigneeAgentId` + a comment explaining the routing. The engineer's work is done; QA needs to pick it up.
+- Do NOT re-assign `in_review` issues back to the same engineering owner. That is never correct -- `in_review` means "ready for QA", not "needs more engineering".
+- For stale `in_progress` issues (no activity for >60 min): check the thread. If the last comment says work is complete and awaiting QA, set status to `in_review` and reassign to QA Agent. If genuinely stalled, comment asking the assignee for a status update before retrigering.
+- Never retrigger by re-assigning to the same owner without reading the thread first.
+
+## 6. Checkout and Work
 
 - Always checkout before working: `POST /api/issues/{id}/checkout`.
 - Never retry a 409 -- that task belongs to someone else.
 - Do the work. Update status and comment when done.
 - For code tasks: ensure code is pushed and a PR exists before marking done. The system enforces this for all agents.
 
-## 6. Delegation
+## 7. Delegation
 
 - Create subtasks with `POST /api/companies/{companyId}/issues`. Always set `parentId` and `goalId`.
 - Use `paperclip-create-agent` skill when hiring new agents.
 - Assign work to the right agent for the job.
 
-## 7. Fact Extraction
+## 8. Fact Extraction
 
 1. Check for new conversations since last extraction.
 2. Extract durable facts to the relevant entity in `$AGENT_HOME/life/` (PARA).
 3. Update `$AGENT_HOME/memory/YYYY-MM-DD.md` with timeline entries.
 4. Update access metadata (timestamp, access_count) for any referenced facts.
 
-## 8. Exit
+## 9. Exit
 
 - Comment on any in_progress work before exiting.
 - If no assignments and no valid mention-handoff, exit cleanly.
