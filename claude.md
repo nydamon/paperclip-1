@@ -124,7 +124,7 @@ docker exec paperclip-db-1 psql -U paperclip paperclip -t -A -c "
 - **Extension path**: `/paperclip/.pi/agent/extensions/pi-autoresearch/index.ts`
 - **Skill path**: `/paperclip/.pi/agent/skills/autoresearch-create/SKILL.md`
 - **Framework doc**: `/paperclip/.pi/agent/pi_autoresearch_team_experiment_framework.md`
-- **pi CLI**: baked into `Dockerfile.vps` via `PI_CODING_AGENT_VERSION` ARG (currently `0.61.1`)
+- **pi CLI**: baked into `Dockerfile.vps` via `PI_CODING_AGENT_VERSION` ARG (currently `0.65.0`)
 - **Persistence**: volume-based (`/paperclip/.pi/`). Survives container recreation, NOT volume wipes.
 - **Reinstall if lost**:
   ```bash

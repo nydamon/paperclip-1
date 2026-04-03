@@ -45,7 +45,7 @@ ARG CLAUDE_CODE_VERSION=2.1.78
 ARG GEMINI_CLI_VERSION=0.34.0
 ARG CODEX_VERSION=0.115.0
 ARG OPENCODE_VERSION=1.3.3
-ARG PI_CODING_AGENT_VERSION=0.61.1
+ARG PI_CODING_AGENT_VERSION=0.65.0
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     gh jq openssh-client tmux ripgrep fd-find procps tree patch \
