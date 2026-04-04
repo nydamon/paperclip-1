@@ -2824,6 +2824,19 @@ export function heartbeatService(db: Db) {
       ].filter(Boolean).join("\n");
       context.paperclipCanAssignTasks = agentCanAssignTasks;
 
+      // Build agent roster so LLMs have accurate IDs (prevents UUID confabulation)
+      const companyAgents = await db
+        .select({
+          id: agents.id,
+          name: agents.name,
+          role: agents.role,
+          status: agents.status,
+        })
+        .from(agents)
+        .where(and(eq(agents.companyId, agent.companyId), ne(agents.status, "terminated")))
+        .orderBy(agents.name);
+      context.paperclipAgentRoster = companyAgents;
+
       const adapterResult = await adapter.execute({
         runId: run.id,
         agent,

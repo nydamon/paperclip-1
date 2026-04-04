@@ -10,6 +10,7 @@ import {
   parseObject,
   buildPaperclipEnv,
   joinPromptSections,
+  renderAgentRosterNote,
   buildInvocationEnvForLogs,
   ensureAbsoluteDirectory,
   ensureCommandResolvable,
@@ -316,6 +317,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       : "";
   const sessionHandoffNote = asString(context.paperclipSessionHandoffMarkdown, "").trim();
   const permissionNote = asString(context.paperclipPermissionNote, "").trim();
+  const rosterNote = renderAgentRosterNote(context.paperclipAgentRoster);
   const apiUrlNote = env.PAPERCLIP_API_URL
     ? `## Paperclip API\n\nYour local Paperclip API URL is: ${env.PAPERCLIP_API_URL}\nAll API calls (GET/POST/PATCH on /api/...) MUST use this URL. Do NOT use api.paperclip.ing or any other external URL.`
     : "";
@@ -323,6 +325,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     renderedBootstrapPrompt,
     sessionHandoffNote,
     permissionNote,
+    rosterNote,
     apiUrlNote,
     renderedHeartbeatPrompt,
   ]);

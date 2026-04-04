@@ -201,6 +201,28 @@ export function joinPromptSections(
     .join(separator);
 }
 
+export function renderAgentRosterNote(roster: unknown): string {
+  if (!Array.isArray(roster) || roster.length === 0) return "";
+  const esc = (v: string) => v.replace(/\|/g, "\\|");
+  const lines = [
+    "## Agent Roster (this heartbeat)",
+    "",
+    "Use these exact IDs for assignment (PATCH assigneeAgentId) or @mention by kebab-name.",
+    "",
+    "| Name | ID | Role | Status |",
+    "|------|-----|------|--------|",
+  ];
+  for (const a of roster) {
+    if (!a || typeof a !== "object") continue;
+    const name = esc(String((a as Record<string, unknown>).name ?? ""));
+    const id = String((a as Record<string, unknown>).id ?? "");
+    const role = esc(String((a as Record<string, unknown>).role ?? ""));
+    const status = esc(String((a as Record<string, unknown>).status ?? ""));
+    lines.push(`| ${name} | \`${id}\` | ${role} | ${status} |`);
+  }
+  return lines.join("\n");
+}
+
 export function redactEnvForLogs(env: Record<string, string>): Record<string, string> {
   const redacted: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {

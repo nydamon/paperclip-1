@@ -14,6 +14,7 @@ import {
   buildPaperclipEnv,
   readPaperclipRuntimeSkillEntries,
   joinPromptSections,
+  renderAgentRosterNote,
   buildInvocationEnvForLogs,
   ensureAbsoluteDirectory,
   ensureCommandResolvable,
@@ -408,10 +409,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       : "";
   const sessionHandoffNote = asString(context.paperclipSessionHandoffMarkdown, "").trim();
   const permissionNote = asString(context.paperclipPermissionNote, "").trim();
+  const rosterNote = renderAgentRosterNote(context.paperclipAgentRoster);
   const prompt = joinPromptSections([
     renderedBootstrapPrompt,
     sessionHandoffNote,
     permissionNote,
+    rosterNote,
     renderedPrompt,
   ]);
   const promptMetrics = {
