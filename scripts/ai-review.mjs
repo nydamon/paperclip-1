@@ -21,10 +21,10 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-const MODEL = "minimax/minimax-m2.7";
+export const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+export const MODEL = "minimax/minimax-m2.7";
 const MAX_DIFF_BYTES = 100_000;
-const REQUEST_TIMEOUT_MS = 90_000;
+export const REQUEST_TIMEOUT_MS = 90_000;
 
 const SYSTEM_PROMPT = `You are a senior code reviewer for the Paperclip agent platform — a TypeScript monorepo with a Node.js server, PostgreSQL database, Docker deployment, and GitHub Actions CI/CD.
 

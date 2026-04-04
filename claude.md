@@ -56,6 +56,15 @@ Both `Dockerfile` and `Dockerfile.vps` now install the following in the producti
 - `procps` — provides `ps`, `top`, etc.
 - `tree` — directory tree display
 - `patch` — apply patch files
+- `unzip` — extract ZIP archives
+- `jq` — JSON processing
+- `tmux` — terminal multiplexer
+- `openssh-client` — SSH, SCP, ssh-keyscan
+- `docker` — Docker CLI (no daemon) for `docker exec` into sidecars
+
+**Runtime interpreters available:** `node` (v22), `bun` (at `/paperclip/bin/bun`)
+
+**NOT available in the production container (do not attempt):** `python3`, `pip`, `zip` (use `node`/`bun` for zip creation), `wget` (use `curl`). Agents must not waste turns probing for unavailable tools — use `node`/`bun` for any scripting needs beyond shell.
 
 Operational rule for `gh` inside the production container:
 - Never run `gh auth login`
@@ -676,6 +685,43 @@ Diffs exceeding 100KB are truncated. If the original verdict would be `PASS`, it
 - `scripts/ai-review.mjs` — review script (pure functions, native fetch, no dependencies)
 - `.github/workflows/ai-review.yml` — GHA workflow (triggered on PR events)
 - `.github/workflows/merge-automation.yml` — consumes `ai-review/verdict` for auto-merge
+
+### Auto-remediation
+
+When the AI review finds issues (`PASS_WITH_NOTES` or non-critical `FAIL`), the workflow automatically attempts to fix them:
+
+1. Collects affected files from findings (max 5 files, 50KB each)
+2. Sends findings + file contents to MiniMax M2.7 via `scripts/ai-remediate.mjs`
+3. Applies patches, validates syntax (`node --check` for JS, `jq` for JSON)
+4. Commits with `[ai-fix]` marker, pushes to PR branch via `github.token`
+5. Re-runs `ai-review.mjs` on the updated diff
+6. Posts final verdict based on re-review result
+
+**Infinite loop prevention:**
+- **Primary:** `github.token` pushes do NOT trigger `pull_request` events (GitHub design)
+- **Secondary:** `[ai-fix]` commit message marker — workflow detects it and skips remediation
+
+**Remediation is skipped when:**
+- HEAD commit has `[ai-fix]` marker (already remediated)
+- Verdict is `PASS`, `ERROR`, or `HIGH_RISK`
+- Findings contain `critical` severity (requires human review)
+- More than 5 affected files
+- No file paths in findings
+
+**LLM call budget:**
+
+| Scenario | Calls |
+|----------|-------|
+| Clean review (PASS) | 1 |
+| Findings + successful remediation | 3 (review + remediate + re-review) |
+| Findings + failed remediation | 2 (review + remediate) |
+| Critical findings (no remediation) | 1 |
+
+**Key files:**
+- `scripts/ai-remediate.mjs` — remediation script (pure functions, no side effects)
+- `scripts/ai-review.mjs` — review script (exports `callOpenRouter` for reuse)
+- `.github/workflows/ai-review.yml` — workflow with remediation step
+- `server/src/__tests__/ai-remediate.test.ts` — unit tests
 
 ### Manual fallback
 
