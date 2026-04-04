@@ -136,7 +136,7 @@ describe("issue creation rate limit", () => {
   });
 
   it("returns 429 when agent exceeds rate limit", async () => {
-    mockIssueService.countRecentByAgent.mockResolvedValue(5);
+    mockIssueService.countRecentByAgent.mockResolvedValue(50);
 
     const app = createAgentApp();
     const res = await request(app)
@@ -150,7 +150,7 @@ describe("issue creation rate limit", () => {
   });
 
   it("allows creation when under rate limit", async () => {
-    mockIssueService.countRecentByAgent.mockResolvedValue(4);
+    mockIssueService.countRecentByAgent.mockResolvedValue(49);
     mockIssueService.create.mockResolvedValue(createdIssue);
 
     const app = createAgentApp();
@@ -190,7 +190,7 @@ describe("issue creation rate limit", () => {
   });
 
   it("logs rate limit events to activity log", async () => {
-    mockIssueService.countRecentByAgent.mockResolvedValue(5);
+    mockIssueService.countRecentByAgent.mockResolvedValue(50);
 
     const app = createAgentApp();
     await request(app)
@@ -202,8 +202,8 @@ describe("issue creation rate limit", () => {
       expect.objectContaining({
         action: "issue.creation_rate_limited",
         details: expect.objectContaining({
-          count: 5,
-          limit: 5,
+          count: 50,
+          limit: 50,
           window: "1h",
         }),
       }),

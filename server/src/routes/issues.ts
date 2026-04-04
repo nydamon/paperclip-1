@@ -1279,7 +1279,7 @@ export function issueRoutes(
     // Agent issue creation rate limit
     if (actor.actorType === "agent" && actor.agentId) {
       const recentCount = await svc.countRecentByAgent(actor.agentId);
-      const rateLimit = parseInt(process.env.AGENT_ISSUE_CREATION_RATE_LIMIT ?? "5", 10);
+      const rateLimit = parseInt(process.env.AGENT_ISSUE_CREATION_RATE_LIMIT ?? "50", 10);
       if (recentCount >= rateLimit) {
         await logActivity(db, {
           companyId,
