@@ -151,7 +151,7 @@ async function markDelivery(deliveryId: string): Promise<void> {
 // CI issue dedup — find existing open issue by title prefix
 // ---------------------------------------------------------------------------
 
-const OPEN_STATUSES = new Set(["backlog", "todo", "in_progress", "in_review"]);
+const OPEN_STATUSES = ["backlog", "todo", "in_progress", "in_review"] as const;
 
 async function findExistingCIIssue(
   companyId: string,
@@ -159,16 +159,19 @@ async function findExistingCIIssue(
 ): Promise<{ id: string; title: string } | null> {
   if (!ctx) return null;
   try {
-    const issues = await ctx.issues.list({
-      companyId,
-      limit: 50,
-      offset: 0,
-    });
-    return (
-      issues.find(
-        (i) => OPEN_STATUSES.has(i.status) && i.title.startsWith(titlePrefix),
-      ) ?? null
-    );
+    // Search each open status individually to avoid missing issues buried
+    // beyond the first page of an unfiltered list.
+    for (const status of OPEN_STATUSES) {
+      const issues = await ctx.issues.list({
+        companyId,
+        status,
+        limit: 50,
+        offset: 0,
+      });
+      const match = issues.find((i) => i.title.startsWith(titlePrefix));
+      if (match) return { id: match.id, title: match.title };
+    }
+    return null;
   } catch (err) {
     ctx.logger.warn(`Failed to check for existing CI issue: ${err}`);
     return null;
@@ -208,8 +211,8 @@ async function handleWorkflowRun(payload: GitHubWorkflowRunEvent): Promise<void>
     if (commented) return;
   }
 
-  const titlePrefix = `CI failure: ${run.name}`;
-  const title = `${titlePrefix} #${run.run_number} on ${repo}`;
+  const titlePrefix = `CI failure: ${run.name} on ${repo}`;
+  const title = `${titlePrefix} #${run.run_number}`;
   const description = buildWorkflowRunDescription(payload);
 
   const existing = await findExistingCIIssue(config.companyId, titlePrefix);
@@ -227,20 +230,9 @@ async function handleWorkflowRun(payload: GitHubWorkflowRunEvent): Promise<void>
     title,
     description,
     priority: "high",
-    status: "todo",
+    status: "backlog",
     assigneeAgentId,
   });
-
-  if (assigneeAgentId) {
-    try {
-      await ctx!.agents.invoke(assigneeAgentId, config.companyId, {
-        prompt: `CI failure on ${repo}: workflow "${run.name}" #${run.run_number} failed (${run.conclusion}). Details: ${run.html_url}`,
-        reason: "github-ci-failure",
-      });
-    } catch {
-      ctx?.logger.warn(`Could not invoke agent ${assigneeAgentId}`);
-    }
-  }
 }
 
 async function handleCheckRun(payload: GitHubCheckRunEvent): Promise<void> {
@@ -264,7 +256,7 @@ async function handleCheckRun(payload: GitHubCheckRunEvent): Promise<void> {
   }
 
   const titlePrefix = `PR gate failure: ${check.name} on ${repo}`;
-  const title = titlePrefix;
+  const title = `${titlePrefix}`;
   const description = buildCheckRunDescription(payload);
 
   const existing = await findExistingCIIssue(config.companyId, titlePrefix);
@@ -284,20 +276,9 @@ async function handleCheckRun(payload: GitHubCheckRunEvent): Promise<void> {
     title,
     description,
     priority: "high",
-    status: "todo",
+    status: "backlog",
     assigneeAgentId,
   });
-
-  if (assigneeAgentId) {
-    try {
-      await ctx!.agents.invoke(assigneeAgentId, config.companyId, {
-        prompt: `PR gate failure on ${repo}: check "${check.name}" failed (${check.conclusion}). Details: ${check.html_url}`,
-        reason: "github-pr-gate-failure",
-      });
-    } catch {
-      ctx?.logger.warn(`Could not invoke agent ${assigneeAgentId}`);
-    }
-  }
 }
 
 // ---------------------------------------------------------------------------
