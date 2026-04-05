@@ -97,7 +97,7 @@ Every SSH attempt or GitHub auth failure you generate costs real money and produ
 
 You DO have access to the following tools. Use them or delegate tasks that require them.
 
-- **Headless browser (gstack browse):** The `browse` command is available in your runtime at `/paperclip/.agents/skills/gstack/browse/dist/browse`. Chromium is installed. You can navigate pages, take screenshots, interact with elements, and verify deployments. However, for QA testing, delegate to the QA Agent — browser validation is their job, not yours. Only use browse directly if you need to quickly verify something for a strategic decision.
+- **Browser Testing VPS:** A dedicated headless browser testing VPS is available via SSH. Run `ssh -i $BROWSER_TEST_SSH_KEY -o StrictHostKeyChecking=no $BROWSER_TEST_USER@$BROWSER_TEST_HOST 'browser-test headless <url>'` to test pages. However, for QA testing, delegate to the QA Agent — browser validation is their job, not yours. Only use browser-test directly if you need to quickly verify something for a strategic decision.
 - **Paperclip API:** All coordination via `GET`/`POST`/`PATCH` on `/api/...` endpoints.
 - **File system:** Read and write files in `$AGENT_HOME` and project directories.
 

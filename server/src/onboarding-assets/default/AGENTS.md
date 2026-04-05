@@ -106,37 +106,53 @@ If your task requires GitHub or CI access — checking CI status, reading privat
 
 ## Available Tools
 
-### Headless browser (gstack browse)
+### Browser Testing VPS
 
-A Chromium browser is available for QA testing, site verification, and dogfooding. The `browse` CLI is at `~/.claude/skills/gstack/browse/dist/browse` (or `/paperclip/.agents/skills/gstack/browse/dist/browse`). Chromium is pre-installed in the container.
+A dedicated headless browser testing VPS is available at `207.148.14.165` with Chromium and Playwright pre-installed. All agents have SSH access via environment variables.
 
-Usage: `~/.claude/skills/gstack/browse/dist/browse <command> [args]`
+**Connection details (from env vars):**
+- Host: `$BROWSER_TEST_HOST` (207.148.14.165)
+- User: `$BROWSER_TEST_USER` (root)
+- SSH key: `$BROWSER_TEST_SSH_KEY` (/paperclip/.ssh/id_ed25519_test_vps)
 
-Key commands: `goto <url>`, `snapshot`, `click <selector>`, `fill <selector> <value>`, `screenshot [path]`, `text`, `url`, `console`, `network`
+**Commands:**
 
-Use this for verifying deployments, testing user flows, taking screenshots for bug reports, and QA validation. See `~/.claude/skills/gstack/BROWSER.md` for the full command reference.
+Headless test (default — returns page HTML):
+```
+ssh -i $BROWSER_TEST_SSH_KEY -o StrictHostKeyChecking=no $BROWSER_TEST_USER@$BROWSER_TEST_HOST \
+  'browser-test headless <url>'
+```
+
+DOM dump for inspection (first 50 lines):
+```
+ssh -i $BROWSER_TEST_SSH_KEY -o StrictHostKeyChecking=no $BROWSER_TEST_USER@$BROWSER_TEST_HOST \
+  'DISPLAY=:99 /root/.cache/ms-playwright/chromium-1217/chrome-linux64/chrome \
+   --headless --no-sandbox --disable-gpu --dump-dom <url> | head -50'
+```
+
+Headed test (requires VNC or direct access):
+```
+ssh -i $BROWSER_TEST_SSH_KEY -o StrictHostKeyChecking=no $BROWSER_TEST_USER@$BROWSER_TEST_HOST \
+  'browser-test headed <url>'
+```
 
 ### Required browser steps for simulation/extension/live-call issues
 
-For any issue involving web UI, extension, simulation, or live call features, you MUST use `browse` commands and include evidence in your comments. This is mandatory for both engineers (before handoff) and QA (before PASS).
+For any issue involving web UI, extension, simulation, or live call features, you MUST use the Browser Testing VPS and include evidence in your comments. This is mandatory for both engineers (before handoff) and QA (before PASS).
 
 **Engineer pre-handoff:**
-1. `browse goto <app-url>/live` (or the relevant feature page)
-2. `browse screenshot` — capture the loaded page state
-3. `browse click <start-button-selector>` — start the simulation or call
-4. `browse console` — confirm the specific error from the issue does NOT appear
-5. `browse network` — confirm WebSocket connections established (if applicable)
-6. `browse screenshot` — capture the running state
-7. Include all output in the handoff comment
+1. Run `browser-test headless <app-url>` via SSH — confirm the page loads and renders expected content
+2. Use DOM dump to verify key elements are present (buttons, forms, feature components)
+3. If the issue involves specific error messages, grep the DOM output for the error string and confirm it's gone
+4. Include the SSH command output in the handoff comment
 
 **QA verification:**
-1. Independently repeat the browser flow — do NOT rely on the engineer's screenshots
-2. `browse goto` → `browse snapshot` → interact with the feature → `browse console` → `browse screenshot`
-3. Confirm the specific bug from the issue is fixed
-4. Confirm no new console errors during the interaction
-5. If `browse` cannot reach the page or the feature cannot be tested, do NOT declare QA: PASS — escalate
+1. Independently run `browser-test headless <url>` via SSH — do NOT rely on the engineer's output
+2. Inspect the DOM dump for the feature in question
+3. Confirm the specific bug from the issue is fixed (error strings absent, expected elements present)
+4. If the Browser Testing VPS cannot be reached or the feature cannot be verified, do NOT declare QA: PASS — escalate
 
 **Evidence format for every QA: PASS or handoff comment:**
-- The `browse` commands you ran (copy-paste the actual commands and output)
-- Console output showing no errors (or showing the specific error is gone)
-- At least one screenshot of the feature in its working state
+- The SSH + browser-test commands you ran (copy-paste the actual commands and output)
+- DOM output showing the expected state (relevant snippet, not the entire page)
+- Confirmation that the specific error or broken behavior from the issue is resolved
