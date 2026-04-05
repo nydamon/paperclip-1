@@ -527,6 +527,27 @@ When a heartbeat run finishes with `errorCode: "adapter_failed"`, the finalizer 
 
 ---
 
+## process_lost auto-recovery sweeper
+
+When the server container restarts (deploys, health checks, etc.), all active agent runs die with `process_lost`. The `finalizeAgentStatus()` function sets the agent to `error` state, where it stays until manually reset. Since deploys happen frequently (auto-deploy on every push to master), this creates a recurring manual recovery burden.
+
+`recoverProcessLostAgents()` runs on every scheduler tick (~30s) via `server/src/index.ts`. It finds agents in `error` state (without `pauseReason`), checks their most recent heartbeat run, and if it failed with `process_lost` more than 60 seconds ago, resets the agent to `idle`.
+
+**Behavior:**
+- Scans agents with `status: "error"` and `pauseReason: NULL`
+- Checks the most recent completed run for `errorCode: "process_lost"`
+- Waits 60 seconds after the failure before recovering (avoids racing with the retry mechanism)
+- Resets agent to `idle` and publishes a live event
+- Does NOT recover agents paused by the `adapter_failed` circuit breaker (those have `pauseReason` set)
+
+**Monitor agent exclusion:** The Monitor agent's instructions have been updated to skip `process_lost` failures entirely — no issues are created for them since they are a known platform behavior handled by this sweeper.
+
+**Location:** `server/src/services/heartbeat.ts`, `recoverProcessLostAgents()` method.
+
+**Test file:** `server/src/__tests__/process-lost-recovery.test.ts` — 5 unit tests.
+
+---
+
 ## No-op PATCH short-circuit
 
 The PATCH `/issues/:id` handler detects when all fields in the request body already match the existing issue values and there is no comment or reopen request. In that case it returns the existing issue immediately without writing to the database, logging activity, or triggering agent wakeups.
@@ -1187,3 +1208,62 @@ The encrypted secret record is preserved for recovery. Delete the `company_secre
 ### Phase-2 migration path
 
 See `server/src/wallet/signer-service.ts` for the `SignerService` interface. Phase-2 removes `CONNIE_WALLET_PRIVATE_KEY` from agent env entirely; agents call the signer service endpoint and never see the raw key.
+
+---
+
+## Feedback telemetry is disabled (2026-04-05)
+
+Upstream Paperclip's feedback export system (`feedback-redaction.ts` + `feedback-share-client.ts`) ships trace bundles to `telemetry.paperclip.ing`. This endpoint is unreachable from our deployment.
+
+**The problem:** The share client was always created (defaulting to `telemetry.paperclip.ing` even with no env vars), causing a 5-second flush timer to run 12 regex redaction patterns + gzip + failed fetch on every cycle. Two traces accumulated 5600+ failed retries, consuming **56% of all CPU at idle**. V8 CPU profiling confirmed `applyPattern()` in `feedback-redaction.ts` as the sole hot function.
+
+**The fix (PR #177):** `server/src/index.ts` now only creates the share client and flush timer when `PAPERCLIP_FEEDBACK_EXPORT_BACKEND_URL` or `PAPERCLIP_FEEDBACK_EXPORT_BACKEND_TOKEN` is explicitly set. Without these env vars, the entire redaction pipeline is dormant.
+
+**Result:** CPU dropped from ~100% to ~3%, health check from 210ms to 13ms, memory from 3.2GB to 514MB.
+
+**To re-enable:** Set `PAPERCLIP_FEEDBACK_EXPORT_BACKEND_URL` in the server environment. The flush timer and redaction pipeline will activate automatically.
+
+**Remaining code-level issue:** `applyPattern()` in `feedback-redaction.ts:86-95` runs each regex twice (once via `matchAll` to count, once via `replace` to redact). If telemetry is ever re-enabled, this should be optimized to single-pass.
+
+---
+
+## VPS server sizing (2026-04-05)
+
+**Host:** Vultr High Frequency — 6 vCPU, 16 GB RAM, 320 GB SSD, 5 TB transfer.
+
+**Container limits (`docker-compose.vps.yml`):**
+- Server: `mem_limit: 12g`, `NODE_OPTIONS: --max-old-space-size=8192`
+- Remaining ~4 GB for Postgres, nginx edge proxy, hermes sidecar, and OS
+
+**PostgreSQL autovacuum tuning:** High-churn tables (`heartbeat_runs`, `agent_wakeup_requests`, `plugin_webhook_deliveries`) were going 12-24 hours between autovacuums. Custom settings in `docker-compose.vps.yml`:
+- `autovacuum_vacuum_scale_factor=0.02` (vacuum after 2% dead tuples, default 20%)
+- `autovacuum_analyze_scale_factor=0.01` (analyze after 1% changes, default 10%)
+- `autovacuum_naptime=30s` (check every 30s, default 60s)
+
+---
+
+## Hermes sidecar container (2026-04-05)
+
+Hermes runs as a Docker sidecar on the Paperclip VPS (NOT inside the Paperclip server container).
+
+**Architecture:**
+- Container: `hermes-agent` (image: `hermes-hermes:latest`)
+- Compose: `/opt/hermes/docker-compose.yml`
+- Data volume: `hermes-data` → `/opt/data` inside container
+- Restart policy: `unless-stopped`
+
+**Paperclip integration:**
+- Agent ID: `cc4e7d9e-9059-4064-8106-8039e4492198`
+- Adapter type: `hermes_local` (first-class adapter in `server/src/adapters/registry.ts`)
+- Bridge script: `/app/scripts/hermes-bridge.sh` → `docker exec -i hermes-agent hermes "$@"`
+- Docker socket: mounted read-only at `/var/run/docker.sock` in the server container
+- `group_add: ["999"]` gives the server container Docker group access for `docker exec`
+
+**The hermes-agent container is NOT managed by Paperclip's compose stack.** It must be started separately:
+```bash
+cd /opt/hermes && docker compose up -d
+```
+
+If hermes-agent is missing after a VPS reboot or Docker prune, restart it manually. The `unless-stopped` policy handles normal Docker daemon restarts but not container removal.
+
+**Do NOT SSH from inside the server container to manage hermes.** The adapter uses `docker exec` via the mounted socket — that's the correct path.

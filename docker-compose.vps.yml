@@ -2,6 +2,14 @@ services:
   db:
     image: postgres:17-alpine
     restart: unless-stopped
+    command:
+      - "postgres"
+      - "-c"
+      - "autovacuum_vacuum_scale_factor=0.02"
+      - "-c"
+      - "autovacuum_analyze_scale_factor=0.01"
+      - "-c"
+      - "autovacuum_naptime=30s"
     environment:
       POSTGRES_USER: paperclip
       POSTGRES_PASSWORD: paperclip
@@ -19,13 +27,13 @@ services:
     init: true
     restart: unless-stopped
     stop_grace_period: 30s
-    # ~8GiB host: leave headroom for Postgres + OS. Old 2.8Gi cap caused V8 heap OOM (exit 134).
-    mem_limit: 6g
-    memswap_limit: 6g
+    # 16 GiB host: 12g for server, remainder for Postgres + OS + hermes sidecar.
+    mem_limit: 12g
+    memswap_limit: 12g
     ports:
       - "${PAPERCLIP_PORT:-3100}:3100"
     environment:
-      NODE_OPTIONS: "--max-old-space-size=3072"
+      NODE_OPTIONS: "--max-old-space-size=8192"
       DATABASE_URL: postgres://paperclip:paperclip@db:5432/paperclip
       PORT: "3100"
       SERVE_UI: "true"

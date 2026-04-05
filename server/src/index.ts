@@ -658,6 +658,18 @@ export async function startServer(): Promise<StartedServer> {
         .catch((err) => {
           logger.error({ err }, "unpicked assignment sweep failed");
         });
+
+      // Auto-recover agents stuck in error state from process_lost (deploy restarts).
+      void heartbeat
+        .recoverProcessLostAgents()
+        .then((result) => {
+          if (result.recovered > 0) {
+            logger.info({ ...result }, "auto-recovered process_lost agents");
+          }
+        })
+        .catch((err) => {
+          logger.error({ err }, "process_lost agent recovery sweep failed");
+        });
     }, config.heartbeatSchedulerIntervalMs);
   }
   

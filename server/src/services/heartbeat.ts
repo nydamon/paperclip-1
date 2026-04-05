@@ -4537,5 +4537,82 @@ export function heartbeatService(db: Db) {
       // Workspace runtime services are cleaned up via releaseRuntimeServicesForRun.
       return { reaped: 0 };
     },
+
+    /**
+     * Auto-recover agents stuck in `error` state due to `process_lost` failures.
+     *
+     * When the server container restarts (deploys, health-check restarts, etc.),
+     * every active agent run dies with `process_lost`. If the last run for an
+     * agent was `process_lost`, the agent lands in `error` state and stays there
+     * until manually reset. Since deploys happen frequently, this creates a
+     * recurring manual recovery burden.
+     *
+     * This sweeper checks agents in `error` state (not paused, not terminated),
+     * looks at their most recent heartbeat run, and if it failed with
+     * `process_lost`, resets the agent to `idle` so the next heartbeat tick
+     * picks them back up automatically.
+     *
+     * Agents paused by the `adapter_failed` circuit breaker (pauseReason set)
+     * are NOT recovered — those represent real adapter problems.
+     */
+    async recoverProcessLostAgents() {
+      const errorAgents = await db
+        .select({ id: agents.id, name: agents.name, pauseReason: agents.pauseReason })
+        .from(agents)
+        .where(and(eq(agents.status, "error"), isNull(agents.pauseReason)));
+
+      const recovered: string[] = [];
+      for (const agent of errorAgents) {
+        // Check the most recent completed run for this agent.
+        const [lastRun] = await db
+          .select({
+            errorCode: heartbeatRuns.errorCode,
+            finishedAt: heartbeatRuns.finishedAt,
+          })
+          .from(heartbeatRuns)
+          .where(
+            and(
+              eq(heartbeatRuns.agentId, agent.id),
+              inArray(heartbeatRuns.status, ["failed", "succeeded", "cancelled", "timed_out"]),
+            ),
+          )
+          .orderBy(desc(heartbeatRuns.finishedAt))
+          .limit(1);
+
+        if (!lastRun || lastRun.errorCode !== "process_lost") continue;
+
+        // Only recover if the failure is at least 60s old (avoid racing with
+        // the process_lost retry mechanism which may still be in flight).
+        const finishedAt = lastRun.finishedAt ? new Date(lastRun.finishedAt) : null;
+        if (finishedAt && Date.now() - finishedAt.getTime() < 60_000) continue;
+
+        await db
+          .update(agents)
+          .set({ status: "idle", updatedAt: new Date() })
+          .where(eq(agents.id, agent.id));
+
+        recovered.push(agent.name ?? agent.id);
+
+        publishLiveEvent({
+          companyId: (
+            await db
+              .select({ companyId: agents.companyId })
+              .from(agents)
+              .where(eq(agents.id, agent.id))
+              .limit(1)
+          )[0]?.companyId ?? "",
+          type: "agent.status",
+          payload: { agentId: agent.id, status: "idle" },
+        });
+      }
+
+      if (recovered.length > 0) {
+        logger.info(
+          { count: recovered.length, agents: recovered },
+          "auto-recovered agents from process_lost error state",
+        );
+      }
+      return { recovered: recovered.length };
+    },
   };
 }
