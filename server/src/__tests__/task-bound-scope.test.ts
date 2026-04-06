@@ -414,34 +414,33 @@ describe("task-bound scope enforcement", () => {
     expect(res.body.gate).toBe("task_bound_scope");
   });
 
-  // ----- GET /companies/:companyId/issues: list short-circuit -----
+  // ----- GET /companies/:companyId/issues: task-bound scope does NOT apply -----
 
-  it("list: task-bound returns only bound issue", async () => {
-    const issue = makeIssue();
-    mockIssueService.getById.mockResolvedValue(issue);
+  it("list: task-bound → full results (scope bypassed for list)", async () => {
+    mockIssueService.list.mockResolvedValue([makeIssue(), makeOtherIssue()]);
 
     const res = await request(createAgentApp())
       .get("/api/companies/company-1/issues");
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0].id).toBe(BOUND_ISSUE_ID);
-    // Should NOT call list() — short-circuited via getById
-    expect(mockIssueService.list).not.toHaveBeenCalled();
+    expect(res.body).toHaveLength(2);
+    expect(mockIssueService.list).toHaveBeenCalled();
+    expect(mockIssueService.list).toHaveBeenCalledWith("company-1", expect.any(Object));
   });
 
-  it("list: task-bound with unknown runId → empty (fail-closed)", async () => {
+  it("list: task-bound with unknown runId → full results (no fail-closed)", async () => {
     mockHeartbeatGetRun.mockResolvedValue(null);
+    mockIssueService.list.mockResolvedValue([makeIssue(), makeOtherIssue()]);
 
     const res = await request(createAgentApp())
       .get("/api/companies/company-1/issues");
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual([]);
-    expect(mockIssueService.list).not.toHaveBeenCalled();
+    expect(res.body).toHaveLength(2);
+    expect(mockIssueService.list).toHaveBeenCalled();
   });
 
-  it("list: board user → full results (bypass)", async () => {
+  it("list: board user → full results", async () => {
     mockIssueService.list.mockResolvedValue([makeIssue(), makeOtherIssue()]);
 
     const res = await request(createBoardApp())
@@ -452,7 +451,7 @@ describe("task-bound scope enforcement", () => {
     expect(mockIssueService.list).toHaveBeenCalled();
   });
 
-  it("list: timer wake (no issueId) → full results", async () => {
+  it("list: timer wake → full results", async () => {
     mockHeartbeatGetRun.mockResolvedValue({
       contextSnapshot: { source: "timer" },
     });

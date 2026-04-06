@@ -741,22 +741,6 @@ export function issueRoutes(
       return;
     }
 
-    // Task-bound scope: short-circuit to avoid full DB query
-    const scope = await getTaskBoundScope(req, (runId) => heartbeat.getRun(runId));
-    if (scope.isTaskBound) {
-      if (!scope.boundIssueId) {
-        res.json([]);
-        return;
-      }
-      const issue = await svc.getById(scope.boundIssueId);
-      if (issue && issue.companyId === companyId) {
-        res.json([issue]);
-      } else {
-        res.json([]);
-      }
-      return;
-    }
-
     const result = await svc.list(companyId, {
       status: req.query.status as string | undefined,
       assigneeAgentId: req.query.assigneeAgentId as string | undefined,
