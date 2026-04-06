@@ -9,6 +9,7 @@ const mockIssueService = vi.hoisted(() => ({
   update: vi.fn(),
   addComment: vi.fn(),
   findMentionedAgents: vi.fn(),
+  hasReachedStatus: vi.fn(),
 }));
 
 const mockAccessService = vi.hoisted(() => ({

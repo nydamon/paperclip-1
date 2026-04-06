@@ -116,9 +116,23 @@ ssh -i $BROWSER_TEST_SSH_KEY -o StrictHostKeyChecking=no $BROWSER_TEST_USER@$BRO
 
 2. **Extract the relevant snippet** from the HTML showing the bug.
 
-3. **Append to the report immediately.** Do not batch issues for later. Write each one as you find it so nothing is lost if the session is interrupted.
+3. **Upload screenshot evidence to the issue** (required for evidence gates):
 
-4. **Increment the issue counter** (ISSUE-001, ISSUE-002, ...).
+```bash
+# Download screenshot from Browser Testing VPS
+scp -i $BROWSER_TEST_SSH_KEY -o StrictHostKeyChecking=no \
+  $BROWSER_TEST_USER@$BROWSER_TEST_HOST:/tmp/screenshot.png {OUTPUT_DIR}/snapshots/issue-{NNN}.png
+
+# Upload as attachment (returns JSON with contentPath for markdown embedding)
+curl -sS "$PAPERCLIP_API_URL/api/companies/$PAPERCLIP_COMPANY_ID/issues/$ISSUE_ID/attachments" \
+  -H "Authorization: Bearer $PAPERCLIP_API_KEY" \
+  -H "X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID" \
+  -F "file=@{OUTPUT_DIR}/snapshots/issue-{NNN}.png"
+```
+
+4. **Append to the report immediately.** Do not batch issues for later. Write each one as you find it so nothing is lost if the session is interrupted.
+
+5. **Increment the issue counter** (ISSUE-001, ISSUE-002, ...).
 
 ### 5. Wrap Up
 

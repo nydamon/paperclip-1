@@ -14,6 +14,7 @@ const mockIssueService = vi.hoisted(() => ({
   getCommentCursor: vi.fn(),
   listComments: vi.fn(),
   findMentionedAgents: vi.fn(),
+  hasReachedStatus: vi.fn(),
   findMentionedProjectIds: vi.fn(async () => []),
   list: vi.fn(),
   checkout: vi.fn(),

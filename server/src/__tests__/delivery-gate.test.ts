@@ -13,6 +13,7 @@ const mockIssueService = vi.hoisted(() => ({
   listComments: vi.fn(),
   listAttachments: vi.fn(),
   findMentionedAgents: vi.fn(),
+  hasReachedStatus: vi.fn(),
 }));
 
 const mockWorkProductService = vi.hoisted(() => ({
@@ -148,6 +149,8 @@ describe("delivery gate", () => {
     mockIssueService.addComment.mockResolvedValue({ id: "comment-1", body: "test" });
     mockIssueService.listAttachments.mockResolvedValue([]);
     mockIssueService.findMentionedAgents.mockResolvedValue([]);
+    // Default: issue has been through in_review (review cycle gate passes)
+    mockIssueService.hasReachedStatus.mockResolvedValue(true);
   });
 
   it("agent → in_review on code issue with no work products → 422", async () => {
@@ -325,5 +328,58 @@ describe("delivery gate", () => {
         }),
       }),
     );
+  });
+
+  // --- Hotfix commit fallback ---
+
+  it("agent → done on code issue with verified commit (no PR) → 200 (hotfix fallback)", async () => {
+    mockIssueService.getById.mockResolvedValue(codeIssue);
+    mockIssueService.update.mockResolvedValue({ ...codeIssue, status: "done" });
+    mockWorkProductService.listForIssue.mockResolvedValue([
+      { type: "commit", status: "active", url: "https://github.com/org/repo/commit/abc123def" },
+    ]);
+    mockIssueService.listComments.mockResolvedValue([
+      { body: "QA: PASS — browser-test headless http://localhost verified, no console errors", authorAgentId: "qa-agent-1", authorUserId: null, createdAt: "2026-03-31T00:00:00Z" },
+    ]);
+    mockIssueService.listAttachments.mockResolvedValue([
+      { contentType: "image/png", createdByAgentId: "qa-agent-1", createdByUserId: null, createdAt: "2026-03-31T00:00:00Z" },
+    ]);
+
+    const app = createAgentApp();
+    const res = await request(app)
+      .patch(`/api/issues/${codeIssue.id}`)
+      .send({ status: "done", comment: "Hotfix committed to main" });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("agent → done on code issue with no PR and no commit → 422", async () => {
+    mockIssueService.getById.mockResolvedValue(codeIssue);
+    mockWorkProductService.listForIssue.mockResolvedValue([
+      { type: "branch", status: "active", url: "https://github.com/org/repo/tree/fix" },
+    ]);
+
+    const app = createAgentApp();
+    const res = await request(app)
+      .patch(`/api/issues/${codeIssue.id}`)
+      .send({ status: "done", comment: "Done" });
+
+    expect(res.status).toBe(422);
+    expect(res.body.gate).toBe("done_requires_pr");
+  });
+
+  it("agent → done on code issue with commit but no valid URL → 422", async () => {
+    mockIssueService.getById.mockResolvedValue(codeIssue);
+    mockWorkProductService.listForIssue.mockResolvedValue([
+      { type: "commit", status: "active", url: null },
+    ]);
+
+    const app = createAgentApp();
+    const res = await request(app)
+      .patch(`/api/issues/${codeIssue.id}`)
+      .send({ status: "done", comment: "Done" });
+
+    expect(res.status).toBe(422);
+    expect(res.body.gate).toBe("done_requires_pr");
   });
 });

@@ -28,6 +28,36 @@ Use this skill when:
 - Resolve `issueId` from `PAPERCLIP_TASK_ID` when set, otherwise from the issue you are working on.
 - For mutating calls elsewhere, send `X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID`. Read-only GETs below need **Authorization only**.
 
+## Step 0 — Upload attachments (evidence screenshots)
+
+Upload a file as an attachment to an issue. This is **required** for evidence gates — the system checks for `issue_attachments` records with image content types.
+
+```bash
+# Upload a screenshot (multipart form-data, field name: "file")
+curl -sS "$PAPERCLIP_API_URL/api/companies/$PAPERCLIP_COMPANY_ID/issues/$ISSUE_ID/attachments" \
+  -H "Authorization: Bearer $PAPERCLIP_API_KEY" \
+  -H "X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID" \
+  -F "file=@./screenshot.png"
+```
+
+The response includes the attachment `id` and `contentPath`. Use these to embed the image in a comment:
+
+```markdown
+![evidence screenshot]($PAPERCLIP_API_URL/api/attachments/<id>/content)
+```
+
+**Optionally link to a comment** by adding metadata:
+
+```bash
+curl -sS "$PAPERCLIP_API_URL/api/companies/$PAPERCLIP_COMPANY_ID/issues/$ISSUE_ID/attachments" \
+  -H "Authorization: Bearer $PAPERCLIP_API_KEY" \
+  -H "X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID" \
+  -F "file=@./screenshot.png" \
+  -F 'metadata={"issueCommentId":"<comment-uuid>"}'
+```
+
+**Allowed types:** `image/png`, `image/jpeg`, `image/webp`, `image/gif`, `application/pdf`, `text/markdown`, `text/plain`, `application/json`, `text/csv`, `text/html`. Max size: 10MB.
+
 ## Step 1 — List attachments
 
 ```bash

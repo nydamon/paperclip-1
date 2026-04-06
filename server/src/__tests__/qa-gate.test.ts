@@ -13,6 +13,7 @@ const mockIssueService = vi.hoisted(() => ({
   listComments: vi.fn(),
   listAttachments: vi.fn(),
   findMentionedAgents: vi.fn(),
+  hasReachedStatus: vi.fn(),
 }));
 
 const mockWorkProductService = vi.hoisted(() => ({
@@ -149,6 +150,8 @@ describe("qa gate", () => {
     mockIssueService.addComment.mockResolvedValue({ id: "comment-1", body: "test" });
     mockIssueService.findMentionedAgents.mockResolvedValue([]);
     mockIssueService.listAttachments.mockResolvedValue([]);
+    // Default: issue has been through in_review (review cycle gate passes)
+    mockIssueService.hasReachedStatus.mockResolvedValue(true);
   });
 
   it("agent → done, no comments → 422", async () => {
@@ -393,5 +396,76 @@ describe("qa gate", () => {
     expect(res.body.gate).toBe("done_requires_pr");
     // QA gate should NOT have been reached
     expect(mockIssueService.listComments).not.toHaveBeenCalled();
+  });
+
+  // --- Review cycle gate (done_requires_review_cycle) ---
+
+  it("agent → done, code issue never in_review → 422 done_requires_review_cycle", async () => {
+    mockIssueService.getById.mockResolvedValue(codeIssue);
+    mockIssueService.listComments.mockResolvedValue([
+      { body: "QA: PASS", authorAgentId: "qa-agent-1", authorUserId: null, createdAt: new Date("2026-03-30T13:00:00Z") },
+    ]);
+    mockIssueService.listAttachments.mockResolvedValue([
+      { contentType: "image/png", createdByAgentId: "qa-agent-1", createdByUserId: null, createdAt: new Date("2026-03-30T13:01:00Z") },
+    ]);
+    // Issue was never in_review
+    mockIssueService.hasReachedStatus.mockResolvedValue(false);
+
+    const app = createAgentApp();
+    const res = await request(app)
+      .patch(`/api/issues/${codeIssue.id}`)
+      .send({ status: "done", comment: "Closing" });
+
+    expect(res.status).toBe(422);
+    expect(res.body.gate).toBe("done_requires_review_cycle");
+  });
+
+  it("agent → done, code issue was in_review, QA pass → 200", async () => {
+    mockIssueService.getById.mockResolvedValue(codeIssue);
+    mockIssueService.update.mockResolvedValue({ ...codeIssue, status: "done" });
+    mockIssueService.listComments.mockResolvedValue([
+      { body: "QA: PASS — browser-test headless https://app.test, no console errors", authorAgentId: "qa-agent-1", authorUserId: null, createdAt: new Date("2026-03-30T13:00:00Z") },
+    ]);
+    mockIssueService.listAttachments.mockResolvedValue([
+      { contentType: "image/png", createdByAgentId: "qa-agent-1", createdByUserId: null, createdAt: new Date("2026-03-30T13:01:00Z") },
+    ]);
+    mockIssueService.hasReachedStatus.mockResolvedValue(true);
+
+    const app = createAgentApp();
+    const res = await request(app)
+      .patch(`/api/issues/${codeIssue.id}`)
+      .send({ status: "done", comment: "Done" });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("agent → done, non-code issue never in_review → 200 (review cycle gate skipped)", async () => {
+    mockIssueService.getById.mockResolvedValue(nonCodeIssue);
+    mockIssueService.update.mockResolvedValue({ ...nonCodeIssue, status: "done" });
+    mockIssueService.listComments.mockResolvedValue([
+      { body: "QA: PASS", authorAgentId: "qa-agent-1", authorUserId: null, createdAt: new Date("2026-03-30T13:00:00Z") },
+    ]);
+    mockIssueService.hasReachedStatus.mockResolvedValue(false);
+
+    const app = createAgentApp();
+    const res = await request(app)
+      .patch(`/api/issues/${nonCodeIssue.id}`)
+      .send({ status: "done", comment: "Done" });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("board → done, code issue never in_review → 200 (board bypass)", async () => {
+    const issueForBoard = { ...codeIssue, assigneeAgentId: null };
+    mockIssueService.getById.mockResolvedValue(issueForBoard);
+    mockIssueService.update.mockResolvedValue({ ...issueForBoard, status: "done" });
+    mockIssueService.hasReachedStatus.mockResolvedValue(false);
+
+    const app = createBoardApp();
+    const res = await request(app)
+      .patch(`/api/issues/${codeIssue.id}`)
+      .send({ status: "done" });
+
+    expect(res.status).toBe(200);
   });
 });

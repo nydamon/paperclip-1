@@ -28,18 +28,51 @@ Engineers MUST verify their fix works end-to-end before handing to QA. QA should
 1. **Run the actual user flow** in a headed browser — not just unit tests or type checks
 2. **Perform the action that was broken** — if the issue says "simulation fails with error X", start a simulation and confirm error X no longer appears
 3. **Include evidence** in the handoff comment: screenshot, test output, or console log showing the flow succeeded
-4. If the fix cannot be verified interactively (e.g. infrastructure-only change), state explicitly what was verified and what was not
+4. **Upload screenshots as attachments** — file path references (e.g. `/tmp/screenshot.png`) are NOT evidence. You MUST upload the screenshot to the issue. See the screenshot upload workflow below.
+5. If the fix cannot be verified interactively (e.g. infrastructure-only change), state explicitly what was verified and what was not
+
+### Screenshot upload workflow (REQUIRED for evidence gates)
+
+The evidence gate requires **actual image attachments** on the issue — not file path references in comments. After capturing a screenshot on the Browser Testing VPS, you MUST upload it:
+
+```bash
+# 1. Capture the screenshot on the Browser Testing VPS
+ssh -i $BROWSER_TEST_SSH_KEY -o StrictHostKeyChecking=no $BROWSER_TEST_USER@$BROWSER_TEST_HOST \
+  'browser-test headless <url>'
+
+# 2. Download the screenshot from the VPS to a local temp file
+scp -i $BROWSER_TEST_SSH_KEY -o StrictHostKeyChecking=no \
+  $BROWSER_TEST_USER@$BROWSER_TEST_HOST:/tmp/screenshot.png ./evidence-screenshot.png
+
+# 3. Upload as an attachment to the issue
+curl -sS "$PAPERCLIP_API_URL/api/companies/$PAPERCLIP_COMPANY_ID/issues/$ISSUE_ID/attachments" \
+  -H "Authorization: Bearer $PAPERCLIP_API_KEY" \
+  -H "X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID" \
+  -F "file=@./evidence-screenshot.png"
+
+# 4. Reference the attachment in your comment using the returned contentPath:
+#    ![screenshot]($PAPERCLIP_API_URL/api/attachments/<id>/content)
+```
+
+**Common mistakes:**
+- Writing `/tmp/vps-screenshot.png` in a comment — this is a file path on another server, not an attachment
+- Saying "screenshots available at..." — the gate checks for `issue_attachments` records, not text
+- Forgetting step 3 — the SCP alone doesn't make it visible to the gate system
 
 ### QA Agent verification standards (before posting QA: PASS)
 
+**Timing requirement:** The issue MUST be in `in_review` status before QA begins testing. If the engineer has not yet handed off to QA (no `in_review` transition), do NOT test and do NOT post QA: PASS. The system enforces this — `done` will be rejected if the issue was never in `in_review`.
+
 QA PASS requires **interactive outcome testing**, not static inspection. The QA Agent must:
 
-1. **Log in** to the application in a headed browser
-2. **Navigate to the feature** — confirm it loads (not a login redirect)
-3. **Perform the user action** — click the button, start the flow, trigger the feature
-4. **Wait for the result** — WebSocket connection, API response, UI state change
-5. **Confirm the specific bug is fixed** — the error from the issue does not appear
-6. Zero relevant console errors during the flow (not just on page load)
+1. **Verify the issue is in `in_review`** — check the issue status before starting QA work
+2. **Log in** to the application in a headed browser
+3. **Navigate to the feature** — confirm it loads (not a login redirect)
+4. **Perform the user action** — click the button, start the flow, trigger the feature
+5. **Wait for the result** — WebSocket connection, API response, UI state change
+6. **Confirm the specific bug is fixed** — the error from the issue does not appear
+7. Zero relevant console errors during the flow (not just on page load)
+8. **Upload screenshot evidence** — follow the screenshot upload workflow above. The `done` gate requires an image attachment from the QA reviewer.
 
 **QA PASS is invalid if based solely on:** grepping source code for strings, HTTP status codes, page-load-only checks, or reading file contents. These are necessary supporting checks, not sufficient proof.
 

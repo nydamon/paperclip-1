@@ -284,10 +284,25 @@ export function issueRoutes(
           && wp.url
           && GH_PR_URL_PATTERN.test(wp.url),
       );
-      if (!hasValidPR) return {
-        gate: "done_requires_pr",
-        reason: "Cannot mark done without a pull request that has a valid GitHub PR URL.",
-      };
+      if (!hasValidPR) {
+        // Hotfix fallback: accept a verified commit on the default branch when no PR exists.
+        const hasVerifiedCommit = products.some(
+          wp => wp.type === "commit"
+            && wp.url
+            && GH_COMMIT_URL_PATTERN.test(wp.url),
+        );
+        if (hasVerifiedCommit) {
+          logger.warn(
+            { issueId: issue.id },
+            "delivery gate: accepting verified commit in lieu of PR (hotfix fallback)",
+          );
+        } else {
+          return {
+            gate: "done_requires_pr",
+            reason: "Cannot mark done without a pull request (or a verified commit with a valid GitHub URL for hotfixes).",
+          };
+        }
+      }
     }
 
     return null;
@@ -303,6 +318,19 @@ export function issueRoutes(
   ): Promise<{ gate: string; reason: string } | null> {
     if (req.actor.type !== "agent") return null;
     if (targetStatus !== "done") return null;
+
+    // For code issues, verify the issue has been through in_review at some point.
+    // QA: PASS posted on issues that never reached in_review indicates the review
+    // handoff protocol was skipped — the engineer never formally handed off for QA.
+    if (issue.executionWorkspaceId) {
+      const hasBeenReviewed = await svc.hasReachedStatus(issue.id, "in_review");
+      if (!hasBeenReviewed) {
+        return {
+          gate: "done_requires_review_cycle",
+          reason: "Code issues must go through in_review before they can be marked done. The issue has never been in in_review status — hand off to QA via the standard review protocol first.",
+        };
+      }
+    }
 
     const hasQAPass = comments.some(
       c =>

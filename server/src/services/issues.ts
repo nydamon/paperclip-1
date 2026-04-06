@@ -1924,6 +1924,25 @@ export function issueService(db: Db) {
         return existing;
       }),
 
+    /**
+     * Check if an issue has ever reached a given status by scanning the activity log
+     * for an `issue.updated` entry with that status in the details JSON.
+     */
+    hasReachedStatus: async (issueId: string, status: string): Promise<boolean> => {
+      const [entry] = await db
+        .select({ id: activityLog.id })
+        .from(activityLog)
+        .where(
+          and(
+            eq(activityLog.entityId, issueId),
+            eq(activityLog.action, "issue.updated"),
+            sql`${activityLog.details}->>'status' = ${status}`,
+          ),
+        )
+        .limit(1);
+      return !!entry;
+    },
+
     findMentionedAgents: async (companyId: string, body: string) => {
       const re = /\B@([^\s@,!?.]+)/g;
       const tokens = new Set<string>();

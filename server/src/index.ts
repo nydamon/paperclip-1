@@ -670,6 +670,18 @@ export async function startServer(): Promise<StartedServer> {
         .catch((err) => {
           logger.error({ err }, "process_lost agent recovery sweep failed");
         });
+
+      // Detect issues closed via direct DB UPDATE (bypassing API gates).
+      void heartbeat
+        .detectDirectDbClosures()
+        .then((result) => {
+          if (result.detected > 0) {
+            logger.warn({ ...result }, "db-bypass closure detection sweep completed");
+          }
+        })
+        .catch((err) => {
+          logger.error({ err }, "db-bypass closure detection sweep failed");
+        });
     }, config.heartbeatSchedulerIntervalMs);
   }
   

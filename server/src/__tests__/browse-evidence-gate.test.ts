@@ -13,6 +13,7 @@ const mockIssueService = vi.hoisted(() => ({
   listComments: vi.fn(),
   listAttachments: vi.fn(),
   findMentionedAgents: vi.fn(),
+  hasReachedStatus: vi.fn(),
 }));
 
 const mockWorkProductService = vi.hoisted(() => ({
@@ -368,6 +369,8 @@ describe("qa browse evidence gate", () => {
     mockWorkProductService.listForIssue.mockResolvedValue([validPR]);
     mockIssueService.addComment.mockResolvedValue({ id: "comment-1", body: "test" });
     mockIssueService.findMentionedAgents.mockResolvedValue([]);
+    // Default: issue has been through in_review (review cycle gate passes)
+    mockIssueService.hasReachedStatus.mockResolvedValue(true);
   });
 
   it("agent → done, QA PASS but no browse evidence from QA reviewer → 422", async () => {

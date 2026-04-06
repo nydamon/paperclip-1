@@ -4671,5 +4671,70 @@ export function heartbeatService(db: Db) {
       }
       return { recovered: recovered.length };
     },
+
+    /**
+     * Detect issues closed to "done" or "cancelled" via direct DB UPDATE
+     * (bypassing the API and all gates). These have no corresponding
+     * `issue.updated` activity log entry with the terminal status.
+     */
+    async detectDirectDbClosures() {
+      const recentlyClosed = await db
+        .select({
+          id: issues.id,
+          identifier: issues.identifier,
+          status: issues.status,
+          companyId: issues.companyId,
+          updatedAt: issues.updatedAt,
+        })
+        .from(issues)
+        .where(
+          and(
+            inArray(issues.status, ["done", "cancelled"]),
+            gte(issues.updatedAt, sql`now() - interval '60 minutes'`),
+          ),
+        );
+
+      const bypassed: Array<{ identifier: string | null; status: string }> = [];
+
+      for (const issue of recentlyClosed) {
+        const [logEntry] = await db
+          .select({ id: activityLog.id })
+          .from(activityLog)
+          .where(
+            and(
+              eq(activityLog.entityId, issue.id),
+              eq(activityLog.action, "issue.updated"),
+              sql`${activityLog.details}->>'status' = ${issue.status}`,
+            ),
+          )
+          .limit(1);
+
+        if (!logEntry) {
+          bypassed.push({ identifier: issue.identifier, status: issue.status });
+
+          await logActivity(db, {
+            companyId: issue.companyId,
+            actorType: "system",
+            actorId: "db-bypass-detector",
+            action: "issue.db_bypass_detected",
+            entityType: "issue",
+            entityId: issue.id,
+            details: {
+              status: issue.status,
+              detectedAt: new Date().toISOString(),
+              note: "This issue was closed via direct database UPDATE, bypassing all API gates (delivery, QA, evidence, transition). This is a governance violation.",
+            },
+          });
+        }
+      }
+
+      if (bypassed.length > 0) {
+        logger.warn(
+          { count: bypassed.length, issues: bypassed },
+          "detected issues closed via direct DB UPDATE (bypassing API gates)",
+        );
+      }
+      return { detected: bypassed.length };
+    },
   };
 }
