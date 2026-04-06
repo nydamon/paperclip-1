@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
-import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lte, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, gt, inArray, isNotNull, isNull, lte, ne, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import type { BillingType, ExecutionWorkspace, ExecutionWorkspaceConfig } from "@paperclipai/shared";
 import {
@@ -3510,6 +3510,42 @@ export function heartbeatService(db: Db) {
     if (source !== "timer" && !policy.wakeOnDemand) {
       await writeSkippedRequest("heartbeat.wakeOnDemand.disabled");
       return null;
+    }
+
+    // Comment retrigger cooldown: skip wakeup if any run for this
+    // agent+issue completed within the last N minutes. Prevents agent
+    // ping-pong where A comments → wakes B → B comments → wakes A → repeat.
+    const COMMENT_RETRIGGER_COOLDOWN_MINUTES = 15;
+    if (
+      issueId &&
+      (reason === "issue_comment_retrigger" || reason === "issue_comment_mentioned")
+    ) {
+      const cooldownCutoff = new Date(Date.now() - COMMENT_RETRIGGER_COOLDOWN_MINUTES * 60_000);
+      try {
+        const recentRun = await db
+          .select({ id: heartbeatRuns.id })
+          .from(heartbeatRuns)
+          .where(
+            and(
+              eq(heartbeatRuns.agentId, agentId),
+              sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
+              gte(heartbeatRuns.finishedAt, cooldownCutoff),
+              inArray(heartbeatRuns.status, ["succeeded", "failed"]),
+            ),
+          )
+          .limit(1)
+          .then((rows) => rows[0] ?? null);
+
+        if (recentRun) {
+          await writeSkippedRequest(
+            `comment_retrigger_cooldown: last run ${recentRun.id} finished within ${COMMENT_RETRIGGER_COOLDOWN_MINUTES}min`,
+          );
+          return null;
+        }
+      } catch (err) {
+        // Fail-open: if the cooldown query fails, allow the wakeup to proceed
+        logger.warn({ err, agentId, issueId }, "comment retrigger cooldown check failed, proceeding");
+      }
     }
 
     const bypassIssueExecutionLock =
