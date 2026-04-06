@@ -326,6 +326,10 @@ export function issueRoutes(
   const BROWSE_EVIDENCE_PATTERN =
     /\b(browser-test\s+(headless|headed)|browse\s+(goto|screenshot|snapshot|click)|dump-dom|--dump-dom|screenshot\s+saved|console\s+output|no\s+console\s+errors|DOM\s+(dump|snapshot|output))\b/i;
 
+  // Tolerance for timestamp comparison between evidence (comments/attachments) and issue.updatedAt.
+  // The comment/attachment insert can bump issue.updatedAt a few ms after the record's own createdAt.
+  const EVIDENCE_TIMING_TOLERANCE_MS = 1000;
+
   /**
    * Check if an actor has posted browse evidence text in their comments on this issue.
    * Only considers comments created after `sinceDate` to scope evidence to the current review cycle.
@@ -336,7 +340,7 @@ export function issueRoutes(
     actorUserId: string | null,
     sinceDate: Date | string,
   ): boolean {
-    const since = new Date(sinceDate).getTime();
+    const since = new Date(sinceDate).getTime() - EVIDENCE_TIMING_TOLERANCE_MS;
     return comments.some(c => {
       if (new Date(c.createdAt).getTime() < since) return false;
       const isActor =
@@ -356,7 +360,7 @@ export function issueRoutes(
     actorUserId: string | null,
     sinceDate: Date | string,
   ): boolean {
-    const since = new Date(sinceDate).getTime();
+    const since = new Date(sinceDate).getTime() - EVIDENCE_TIMING_TOLERANCE_MS;
     return attachments.some(a => {
       if (new Date(a.createdAt).getTime() < since) return false;
       const isActor =
@@ -385,7 +389,12 @@ export function issueRoutes(
     const agentId = req.actor.agentId ?? null;
     const sinceDate = issue.updatedAt;
 
-    const hasBrowseText = actorHasBrowseEvidence(comments, agentId, null, sinceDate);
+    // Check persisted comments AND the inline PATCH comment (which hasn't been saved yet).
+    // The inline comment avoids a timing race where comment.createdAt can be slightly before
+    // issue.updatedAt when the comment insert itself triggers the updatedAt bump.
+    // Actor check is unnecessary for the inline path: the PATCH actor IS the commenter (authenticated via req.actor).
+    const hasBrowseText = actorHasBrowseEvidence(comments, agentId, null, sinceDate)
+      || (req.body.comment && BROWSE_EVIDENCE_PATTERN.test(req.body.comment));
     const hasImage = actorHasImageAttachment(attachments, agentId, null, sinceDate);
 
     if (!hasBrowseText || !hasImage) {

@@ -305,6 +305,28 @@ describe("engineer browse evidence gate", () => {
     expect(res.body.gate).toBe("in_review_requires_browse_evidence");
   });
 
+  it("agent → in_review, browse evidence in inline PATCH comment + image → 200", async () => {
+    mockIssueService.getById.mockResolvedValue(codeIssue);
+    mockIssueService.update.mockResolvedValue({ ...codeIssue, status: "in_review" });
+    // No persisted comments with evidence — evidence is in the inline PATCH comment
+    mockIssueService.listComments.mockResolvedValue([]);
+    mockIssueService.listAttachments.mockResolvedValue([
+      {
+        contentType: "image/png",
+        createdByAgentId: "agent-1",
+        createdByUserId: null,
+        createdAt: FRESH_DATE,
+      },
+    ]);
+
+    const app = createAgentApp();
+    const res = await request(app)
+      .patch(`/api/issues/${codeIssue.id}`)
+      .send({ status: "in_review", comment: "browser-test headless http://localhost:3000 — no console errors" });
+
+    expect(res.status).toBe(200);
+  });
+
   it("agent → in_review, evidence from wrong agent → 422", async () => {
     mockIssueService.getById.mockResolvedValue(codeIssue);
     mockIssueService.listComments.mockResolvedValue([
