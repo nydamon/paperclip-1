@@ -15,6 +15,12 @@ export interface GitHubWorkflowRunEvent {
     html_url: string;
     run_number: number;
     run_attempt: number;
+    /** Trigger event type (push, pull_request, schedule, workflow_dispatch) */
+    event: string;
+    /** API URL to fetch job details (step-level failures) */
+    jobs_url: string;
+    /** Workflow file path (e.g. .github/workflows/deploy.yml) */
+    path: string;
     actor: { login: string } | null;
     head_commit: {
       id: string;
@@ -43,6 +49,9 @@ export interface GitHubCheckRunEvent {
     output: {
       title: string | null;
       summary: string | null;
+      /** Detailed markdown body — often contains actual error messages, test failures, annotations. */
+      text: string | null;
+      annotations_count: number;
     };
     check_suite: {
       id: number;

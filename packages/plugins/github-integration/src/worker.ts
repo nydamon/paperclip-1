@@ -231,6 +231,67 @@ async function markRootCauseIssueCreated(
 }
 
 // ---------------------------------------------------------------------------
+// GitHub API helpers — fetch diagnostic data not in the webhook payload
+// ---------------------------------------------------------------------------
+
+interface FailedJobStep {
+  jobName: string;
+  stepName: string;
+  conclusion: string;
+}
+
+/**
+ * Fetch failed job steps for a workflow run.  Requires `githubTokenRef` in
+ * plugin config.  Falls back gracefully to an empty array on any failure.
+ */
+async function fetchFailedJobSteps(jobsUrl: string): Promise<FailedJobStep[]> {
+  if (!ctx) return [];
+  try {
+    const config = await getConfig();
+    if (!config.githubTokenRef) return [];
+
+    const token = await ctx.secrets.resolve(config.githubTokenRef);
+    if (!token) return [];
+
+    const resp = await fetch(jobsUrl, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    });
+    if (!resp.ok) return [];
+
+    const data = (await resp.json()) as {
+      jobs: Array<{
+        name: string;
+        conclusion: string | null;
+        steps?: Array<{ name: string; conclusion: string | null }>;
+      }>;
+    };
+
+    const failed: FailedJobStep[] = [];
+    for (const job of data.jobs) {
+      if (job.conclusion !== "failure" && job.conclusion !== "timed_out") continue;
+      const failedSteps = (job.steps ?? []).filter(
+        (s) => s.conclusion === "failure" || s.conclusion === "timed_out",
+      );
+      if (failedSteps.length > 0) {
+        for (const step of failedSteps) {
+          failed.push({ jobName: job.name, stepName: step.name, conclusion: step.conclusion ?? "failure" });
+        }
+      } else {
+        // Job failed but no individual step marked — report the job itself
+        failed.push({ jobName: job.name, stepName: "(no step detail)", conclusion: job.conclusion ?? "failure" });
+      }
+    }
+    return failed;
+  } catch {
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Severity helpers
 // ---------------------------------------------------------------------------
 
@@ -251,16 +312,21 @@ function severityToPriority(severity: Exclude<WorkflowSeverity, "informational">
 // CI issue dedup — find existing open issue by title prefix
 // ---------------------------------------------------------------------------
 
-const OPEN_STATUSES = ["backlog", "todo", "in_progress", "in_review"] as const;
+const OPEN_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked"] as const;
 
+/**
+ * Search open issues for one matching any of the given title prefixes.
+ * When `extraNormalizedPrefixes` are provided, issues whose normalized
+ * title matches any of them are also considered hits — this catches
+ * cross-event duplicates (e.g. workflow_run "deploy" vs check_run "Deploy Vultr").
+ */
 async function findExistingCIIssue(
   companyId: string,
   titlePrefix: string,
+  extraNormalizedPrefixes: string[] = [],
 ): Promise<{ id: string; title: string } | null> {
   if (!ctx) return null;
   try {
-    // Search each open status individually to avoid missing issues buried
-    // beyond the first page of an unfiltered list.
     for (const status of OPEN_STATUSES) {
       const issues = await ctx.issues.list({
         companyId,
@@ -268,7 +334,14 @@ async function findExistingCIIssue(
         limit: 50,
         offset: 0,
       });
-      const match = issues.find((i) => i.title.startsWith(titlePrefix));
+      const match = issues.find((i) => {
+        if (i.title.startsWith(titlePrefix)) return true;
+        if (extraNormalizedPrefixes.length > 0) {
+          const norm = normalizeWorkflowName(i.title);
+          return extraNormalizedPrefixes.some((p) => norm.startsWith(p));
+        }
+        return false;
+      });
       if (match) return { id: match.id, title: match.title };
     }
     return null;
@@ -276,6 +349,148 @@ async function findExistingCIIssue(
     ctx.logger.warn(`Failed to check for existing CI issue: ${err}`);
     return null;
   }
+}
+
+/**
+ * Find ALL open CI issues matching a set of normalized title prefixes.
+ * Used by auto-close to find issues created under variant names for the
+ * same logical workflow (e.g. "deploy" vs "Deploy Vultr").
+ */
+async function findAllMatchingCIIssues(
+  companyId: string,
+  titlePrefixes: string[],
+  normalizedPrefixes: string[] = [],
+): Promise<Array<{ id: string; title: string; status: string }>> {
+  if (!ctx || (titlePrefixes.length === 0 && normalizedPrefixes.length === 0)) return [];
+  const matches: Array<{ id: string; title: string; status: string }> = [];
+  const seen = new Set<string>();
+  try {
+    for (const status of OPEN_STATUSES) {
+      const issues = await ctx.issues.list({
+        companyId,
+        status,
+        limit: 50,
+        offset: 0,
+      });
+      for (const issue of issues) {
+        if (seen.has(issue.id)) continue;
+        const exactMatch = titlePrefixes.some((p) => issue.title.startsWith(p));
+        const normMatch = normalizedPrefixes.length > 0 &&
+          normalizedPrefixes.some((p) => normalizeWorkflowName(issue.title).startsWith(p));
+        if (exactMatch || normMatch) {
+          matches.push({ id: issue.id, title: issue.title, status });
+          seen.add(issue.id);
+        }
+      }
+    }
+  } catch (err) {
+    ctx.logger.warn(`Failed to search for CI issues to auto-close: ${err}`);
+  }
+  return matches;
+}
+
+// ---------------------------------------------------------------------------
+// Workflow name normalization — collapse variant names into canonical keys
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalize a workflow/check name to a canonical dedup key.
+ * Strips common prefixes/suffixes, lowercases, and collapses separators
+ * so "Deploy Vultr", "deploy", "Build and Deploy Vultr", and "build-and-deploy"
+ * all converge to the same key.
+ *
+ * Examples:
+ *   "Deploy Vultr"            → "deploy-vultr"
+ *   "Build and Deploy Vultr"  → "build-and-deploy-vultr"
+ *   "deploy"                  → "deploy"
+ *   "PR Verify"               → "pr-verify"
+ *   "verify"                  → "verify"
+ *   "AI Review"               → "ai-review"
+ *   "review"                  → "review"
+ *   "Deploy Drift Check"      → "deploy-drift-check"
+ *   "check-drift"             → "check-drift"
+ */
+function normalizeWorkflowName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/**
+ * Generate all title prefixes that could match issues for a given workflow.
+ * Includes both `CI failure:` and `PR gate failure:` variants, plus the
+ * root cause prefix, using both the raw name and its normalized form.
+ */
+function getCIPrefixVariants(workflowName: string, repo: string): string[] {
+  const prefixes = new Set<string>();
+  prefixes.add(`CI failure: ${workflowName} on ${repo}`);
+  prefixes.add(`PR gate failure: ${workflowName} on ${repo}`);
+  prefixes.add(`Root cause: recurring "${workflowName}" failures on ${repo}`);
+  return [...prefixes];
+}
+
+// ---------------------------------------------------------------------------
+// Auto-close — resolve CI issues when the workflow passes again
+// ---------------------------------------------------------------------------
+
+/**
+ * When a workflow/check succeeds, find and close any open CI/PR-gate/root-cause
+ * issues for that workflow.  Also clears the failure tracker so the escalation
+ * counter resets.
+ */
+async function autoCloseOnSuccess(
+  companyId: string,
+  workflowName: string,
+  repo: string,
+  successUrl: string,
+): Promise<void> {
+  if (!ctx) return;
+
+  const prefixes = getCIPrefixVariants(workflowName, repo);
+
+  // Also search by normalized name to catch cross-event variants
+  const normKey = normalizeWorkflowName(workflowName);
+  const normRepo = normalizeWorkflowName(repo);
+  const normalizedPrefixes = [
+    `ci-failure-${normKey}-on-${normRepo}`,
+    `pr-gate-failure-${normKey}-on-${normRepo}`,
+    `root-cause-recurring-${normKey}-failures-on-${normRepo}`,
+  ];
+
+  const matches = await findAllMatchingCIIssues(companyId, prefixes, normalizedPrefixes);
+
+  if (matches.length === 0) return;
+
+  for (const issue of matches) {
+    try {
+      await ctx.issues.createComment(
+        issue.id,
+        [
+          `## Auto-resolved`,
+          "",
+          `**${workflowName}** on \`${repo}\` is passing again.`,
+          `Successful run: [View on GitHub](${successUrl})`,
+          "",
+          `*Auto-closed by GitHub plugin*`,
+        ].join("\n"),
+        companyId,
+      );
+      await ctx.issues.update(issue.id, { status: "cancelled" }, companyId);
+      ctx.logger.info(`Auto-closed CI issue ${issue.id} (${issue.title}) — workflow now passing`);
+    } catch (err) {
+      ctx.logger.warn(`Failed to auto-close issue ${issue.id}: ${err}`);
+    }
+  }
+
+  // Clear failure tracker so escalation counter resets
+  const tracker = await getFailureTracker();
+  const workflowKey = `${workflowName}::${repo}`;
+  const checkKey = `check::${workflowName}::${repo}`;
+  let changed = false;
+  if (tracker[workflowKey]) { delete tracker[workflowKey]; changed = true; }
+  if (tracker[checkKey]) { delete tracker[checkKey]; changed = true; }
+  if (changed) await saveFailureTracker(tracker);
 }
 
 // ---------------------------------------------------------------------------
@@ -303,18 +518,23 @@ async function createRootCauseIssue(
   }
 
   const failureCount = record.timestamps.length;
+  const recentFailures = record.timestamps
+    .slice(-5)
+    .map((ts) => new Date(ts).toISOString().replace("T", " ").slice(0, 19) + " UTC")
+    .join(", ");
+
   const description = [
     `## Root Cause Investigation Required`,
     "",
     `**"${workflowName}"** on \`${repo}\` has failed **${failureCount} times** in the last 24 hours.`,
     "",
-    `This is a recurring failure pattern that needs root-cause investigation rather than`,
-    `individual symptom fixes. Each failure creates or updates a "CI failure:" issue, but`,
-    `the underlying cause has not been resolved.`,
+    `### Failure Timeline`,
     "",
-    `### Action Required`,
+    `Recent failures: ${recentFailures}`,
     "",
-    `1. Investigate why "${workflowName}" keeps failing`,
+    `### Investigation Steps`,
+    "",
+    `1. Check [recent runs on GitHub](https://github.com/${repo}/actions) for error output`,
     `2. Identify the root cause (auth, infra, config, code)`,
     `3. Implement a fix that prevents recurrence`,
     `4. Mark this issue done only when the workflow has succeeded consistently`,
@@ -352,15 +572,23 @@ async function handleWorkflowRun(payload: GitHubWorkflowRunEvent): Promise<void>
   const run = payload.workflow_run;
 
   if (payload.action !== "completed") return;
-  if (run.conclusion !== "failure" && run.conclusion !== "timed_out") return;
 
   const config = await getConfig();
   if (!config.companyId) {
-    ctx?.logger.warn("No companyId configured — skipping issue creation");
+    ctx?.logger.warn("No companyId configured — skipping");
     return;
   }
 
   const repo = payload.repository.full_name;
+
+  // Auto-close open CI issues when the workflow succeeds
+  if (run.conclusion === "success") {
+    await autoCloseOnSuccess(config.companyId, run.name, repo, run.html_url);
+    return;
+  }
+
+  if (run.conclusion !== "failure" && run.conclusion !== "timed_out") return;
+
   const severity = getWorkflowSeverity(config, run.name);
 
   // Informational workflows: log only, no issue creation
@@ -391,9 +619,18 @@ async function handleWorkflowRun(payload: GitHubWorkflowRunEvent): Promise<void>
 
   const titlePrefix = `CI failure: ${run.name} on ${repo}`;
   const title = `${titlePrefix} #${run.run_number}`;
-  const description = buildWorkflowRunDescription(payload);
+  const description = await buildWorkflowRunDescription(payload);
 
-  const existing = await findExistingCIIssue(config.companyId, titlePrefix);
+  // Normalized prefixes catch cross-event duplicates (e.g. check_run "deploy" matches workflow_run "Deploy Vultr")
+  const normKey = normalizeWorkflowName(run.name);
+  const normalizedPrefixes = [
+    normalizeWorkflowName(`CI failure: ${run.name} on ${repo}`),
+    normalizeWorkflowName(`PR gate failure: ${run.name} on ${repo}`),
+    `ci-failure-${normKey}-on-${normalizeWorkflowName(repo)}`,
+    `pr-gate-failure-${normKey}-on-${normalizeWorkflowName(repo)}`,
+  ];
+
+  const existing = await findExistingCIIssue(config.companyId, titlePrefix, normalizedPrefixes);
   if (existing) {
     ctx?.logger.info(`Commenting on existing issue ${existing.id} instead of creating duplicate`);
     await ctx!.issues.createComment(existing.id, `**Re-occurrence:** ${title}\n\n${description}`, config.companyId);
@@ -427,7 +664,6 @@ async function handleCheckRun(payload: GitHubCheckRunEvent): Promise<void> {
   const check = payload.check_run;
 
   if (payload.action !== "completed") return;
-  if (check.conclusion !== "failure" && check.conclusion !== "timed_out") return;
 
   const config = await getConfig();
   if (!config.companyId) {
@@ -436,6 +672,23 @@ async function handleCheckRun(payload: GitHubCheckRunEvent): Promise<void> {
   }
 
   const repo = payload.repository.full_name;
+
+  // Auto-close open CI issues when the check succeeds
+  if (check.conclusion === "success") {
+    await autoCloseOnSuccess(config.companyId, check.name, repo, check.html_url);
+    return;
+  }
+
+  if (check.conclusion !== "failure" && check.conclusion !== "timed_out") return;
+
+  const severity = getWorkflowSeverity(config, check.name);
+
+  // Informational checks: log only, no issue creation
+  if (severity === "informational") {
+    ctx?.logger.info(`Informational check failure (skipping issue): ${check.name} on ${repo}`);
+    return;
+  }
+
   const prNumbers = check.check_suite?.pull_requests.map((pr) => pr.number) ?? [];
 
   if (prNumbers.length > 0) {
@@ -453,7 +706,16 @@ async function handleCheckRun(payload: GitHubCheckRunEvent): Promise<void> {
 
   const assigneeAgentId = config.defaultAssigneeAgentId || undefined;
 
-  const existing = await findExistingCIIssue(config.companyId, titlePrefix);
+  // Normalized prefixes catch cross-event duplicates
+  const normKey = normalizeWorkflowName(check.name);
+  const normalizedPrefixes = [
+    normalizeWorkflowName(`CI failure: ${check.name} on ${repo}`),
+    normalizeWorkflowName(`PR gate failure: ${check.name} on ${repo}`),
+    `ci-failure-${normKey}-on-${normalizeWorkflowName(repo)}`,
+    `pr-gate-failure-${normKey}-on-${normalizeWorkflowName(repo)}`,
+  ];
+
+  const existing = await findExistingCIIssue(config.companyId, titlePrefix, normalizedPrefixes);
   if (existing) {
     ctx?.logger.info(`Commenting on existing issue ${existing.id} instead of creating duplicate`);
     await ctx!.issues.createComment(existing.id, `**Re-occurrence:** ${title}\n\n${description}`, config.companyId);
@@ -471,7 +733,7 @@ async function handleCheckRun(payload: GitHubCheckRunEvent): Promise<void> {
     goalId: config.goalId || undefined,
     title,
     description,
-    priority: "high",
+    priority: severityToPriority(severity as Exclude<WorkflowSeverity, "informational">),
     status: "backlog",
     assigneeAgentId,
   });
@@ -529,7 +791,9 @@ async function commentOnLinkedIssues(
 // Description builders
 // ---------------------------------------------------------------------------
 
-function buildWorkflowRunDescription(event: GitHubWorkflowRunEvent): string {
+async function buildWorkflowRunDescription(
+  event: GitHubWorkflowRunEvent,
+): Promise<string> {
   const run = event.workflow_run;
   const repo = event.repository;
   const commit = run.head_commit;
@@ -540,9 +804,10 @@ function buildWorkflowRunDescription(event: GitHubWorkflowRunEvent): string {
     `| Field | Value |`,
     `|-------|-------|`,
     `| Repository | [${repo.full_name}](${repo.html_url}) |`,
-    `| Workflow | ${run.name} |`,
+    `| Workflow | [${run.name}](${repo.html_url}/actions/workflows/${encodeURIComponent(run.path?.split("/").pop() ?? "")}) |`,
     `| Run | [#${run.run_number}](${run.html_url}) (attempt ${run.run_attempt}) |`,
     `| Branch | \`${run.head_branch}\` |`,
+    `| Trigger | \`${run.event}\` |`,
     `| Conclusion | \`${run.conclusion}\` |`,
     `| Commit | \`${run.head_sha.slice(0, 8)}\` |`,
   ];
@@ -563,6 +828,20 @@ function buildWorkflowRunDescription(event: GitHubWorkflowRunEvent): string {
 
   if (commit?.message) {
     lines.push("", "### Commit Message", "", `> ${commit.message.split("\n")[0]}`);
+  }
+
+  // Fetch failed job steps for actual diagnostic content
+  const failedSteps = await fetchFailedJobSteps(run.jobs_url);
+  if (failedSteps.length > 0) {
+    lines.push("", "### Failed Steps", "");
+    lines.push("| Job | Step | Result |");
+    lines.push("|-----|------|--------|");
+    for (const s of failedSteps.slice(0, 10)) {
+      lines.push(`| ${s.jobName} | ${s.stepName} | \`${s.conclusion}\` |`);
+    }
+    if (failedSteps.length > 10) {
+      lines.push(`| ... | ${failedSteps.length - 10} more | |`);
+    }
   }
 
   lines.push("", "---", `*Created by GitHub plugin*`);
@@ -605,6 +884,14 @@ function buildCheckRunDescription(event: GitHubCheckRunEvent): string {
     lines.push("", "### Summary", "", check.output.summary);
   }
 
+  // output.text often contains actual error messages, test failure details
+  if (check.output.text) {
+    const text = check.output.text.length > 2000
+      ? check.output.text.slice(0, 2000) + "\n\n*(truncated — see GitHub for full output)*"
+      : check.output.text;
+    lines.push("", "### Error Details", "", text);
+  }
+
   lines.push("", "---", `*Created by GitHub plugin*`);
 
   return lines.join("\n");
@@ -619,16 +906,22 @@ function buildFailureComment(
   const url = failureContext.html_url;
   const sha = failureContext.head_sha.slice(0, 8);
 
-  return [
+  const lines = [
     `## CI Failure Detected`,
     "",
     `**${name}** failed on \`${repo}\` at commit \`${sha}\`.`,
     "",
     `- Conclusion: \`${conclusion}\``,
     `- Details: [View on GitHub](${url})`,
-    "",
-    `*Reported by GitHub plugin*`,
-  ].join("\n");
+  ];
+
+  // Include check output summary if available (check_run payloads)
+  if ("output" in failureContext && failureContext.output?.summary) {
+    lines.push("", `**Summary:** ${failureContext.output.summary}`);
+  }
+
+  lines.push("", `*Reported by GitHub plugin*`);
+  return lines.join("\n");
 }
 
 // ---------------------------------------------------------------------------
