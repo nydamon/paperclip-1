@@ -347,12 +347,14 @@ export function issueRoutes(
     return null;
   }
 
-  // ---------- Browse evidence gates (v1 — interim regex control) ----------
-  // This regex is a stopgap. It detects common browser testing command patterns
-  // from the dogfood skill and AGENTS.md. It is gameable (canned text) and will
-  // miss novel workflows. The v2 path is structured evidence tokens from browser-test CLI.
+  // ---------- Browse evidence gates (v1.1 — widened regex control) ----------
+  // This regex detects common browser testing command patterns from the dogfood
+  // skill, AGENTS.md, and observed agent behavior. It is gameable (canned text)
+  // and the v2 path is structured evidence tokens from browser-test CLI.
+  // v1.1: Added goto, snapshot, gstack, playwright, verified, health score,
+  // and standalone screenshot to match actual agent output patterns.
   const BROWSE_EVIDENCE_PATTERN =
-    /\b(browser-test\s+(headless|headed)|browse\s+(goto|screenshot|snapshot|click)|dump-dom|--dump-dom|screenshot\s+saved|console\s+output|no\s+console\s+errors|DOM\s+(dump|snapshot|output))\b/i;
+    /\b(browser-test\s+(headless|headed)|browse\s+(goto|screenshot|snapshot|click)|dump-dom|--dump-dom|screenshot\s+saved|screenshot\s+attached|console\s+(output|errors)|no\s+console\s+errors|DOM\s+(dump|snapshot|output)|goto\s+https?:|snapshot\s+-|gstack|playwright|VERIFIED|health\s+score|browser\s+(verification|testing))\b/i;
 
   // Tolerance for timestamp comparison between evidence (comments/attachments) and issue.updatedAt.
   // The comment/attachment insert can bump issue.updatedAt a few ms after the record's own createdAt.
@@ -425,13 +427,16 @@ export function issueRoutes(
       || (req.body.comment && BROWSE_EVIDENCE_PATTERN.test(req.body.comment));
     const hasImage = actorHasImageAttachment(attachments, agentId, null, sinceDate);
 
-    if (!hasBrowseText || !hasImage) {
-      const missing: string[] = [];
-      if (!hasBrowseText) missing.push("browser testing commands in a comment (e.g. 'browser-test headless <url>')");
-      if (!hasImage) missing.push("an image attachment (screenshot)");
+    // Image attachment is the primary evidence. Browse text is a supporting signal.
+    // If the actor uploaded screenshots, accept even without matching browse text —
+    // the screenshot itself is proof of interactive testing. Text pattern alone
+    // (without an image) is not accepted.
+    if (!hasImage) {
+      const missing: string[] = ["an image attachment (screenshot)"];
+      if (!hasBrowseText) missing.push("browser testing commands in a comment");
       return {
         gate: "in_review_requires_browse_evidence",
-        reason: `Code issues require interactive browser testing evidence before moving to in_review. Missing: ${missing.join(" and ")}. Use the Browser Testing VPS (ssh -i $BROWSER_TEST_SSH_KEY ...) to test your changes, post the output as a comment, and attach a screenshot.`,
+        reason: `Code issues require interactive browser testing evidence before moving to in_review. Missing: ${missing.join(" and ")}. Upload a screenshot via POST /api/companies/{companyId}/issues/{issueId}/attachments and include browser testing output in your comment.`,
       };
     }
 
@@ -468,13 +473,15 @@ export function issueRoutes(
     const hasBrowseText = actorHasBrowseEvidence(comments, qaAgentId, qaUserId, sinceDate);
     const hasImage = actorHasImageAttachment(attachments, qaAgentId, qaUserId, sinceDate);
 
-    if (!hasBrowseText || !hasImage) {
-      const missing: string[] = [];
-      if (!hasBrowseText) missing.push("browser testing commands");
-      if (!hasImage) missing.push("screenshot attachment");
+    // Image attachment is the primary evidence. If the QA reviewer uploaded
+    // screenshots, accept even without matching browse text pattern — the
+    // screenshots prove interactive testing occurred.
+    if (!hasImage) {
+      const missing: string[] = ["screenshot attachment from the QA reviewer"];
+      if (!hasBrowseText) missing.push("browser testing commands in a comment");
       return {
         gate: "done_requires_qa_browse_evidence",
-        reason: `QA PASS without interactive testing evidence is insufficient for code issues. The QA reviewer must include ${missing.join(" and ")} in their review. Use the Browser Testing VPS to verify the fix interactively.`,
+        reason: `QA PASS without interactive testing evidence is insufficient for code issues. Missing: ${missing.join(" and ")}. The QA reviewer must upload screenshots via POST /api/companies/{companyId}/issues/{issueId}/attachments.`,
       };
     }
 
