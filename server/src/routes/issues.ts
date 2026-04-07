@@ -1666,6 +1666,44 @@ export function issueRoutes(
       return;
     }
 
+    // Board-assigned protection: agents (including control-plane) cannot reassign
+    // or change status on issues assigned to a board user. Board-assigned issues
+    // are explicitly parked — the board is the top of the SLA chain.
+    if (
+      req.actor.type === "agent" &&
+      existing.assigneeUserId &&
+      !existing.assigneeAgentId
+    ) {
+      const wantsReassign =
+        (req.body.assigneeAgentId !== undefined && req.body.assigneeAgentId !== existing.assigneeAgentId) ||
+        (req.body.assigneeUserId !== undefined && req.body.assigneeUserId !== existing.assigneeUserId);
+      const wantsStatusChange = req.body.status !== undefined && req.body.status !== existing.status;
+      if (wantsReassign || wantsStatusChange) {
+        const actor = getActorInfo(req);
+        await logActivity(db, {
+          companyId: existing.companyId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          agentId: actor.agentId,
+          runId: actor.runId,
+          action: "issue.board_assigned_protected",
+          entityType: "issue",
+          entityId: existing.id,
+          details: {
+            gate: "board_assigned_protected",
+            reason: "Issue is assigned to a board user. Agents cannot reassign or change status on board-owned issues.",
+            assigneeUserId: existing.assigneeUserId,
+          },
+        });
+        await incrementGateBlockCount(existing.id);
+        res.status(422).json({
+          error: "Issue is assigned to a board user. Only the board can change assignment or status on board-owned issues.",
+          gate: "board_assigned_protected",
+        });
+        return;
+      }
+    }
+
     const assigneeWillChange =
       (req.body.assigneeAgentId !== undefined && req.body.assigneeAgentId !== existing.assigneeAgentId) ||
       (req.body.assigneeUserId !== undefined && req.body.assigneeUserId !== existing.assigneeUserId);
