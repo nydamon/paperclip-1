@@ -1155,6 +1155,40 @@ export function agentRoutes(db: Db) {
     );
   });
 
+  // Alias for /agents/me/inbox-lite — agents frequently call this route by mistake
+  // from older context or mis-remembered URL patterns. Provides a helpful redirect.
+  router.get("/agents/me/issues", async (req, res) => {
+    if (req.actor.type !== "agent" || !req.actor.agentId || !req.actor.companyId) {
+      res.status(401).json({ error: "Agent authentication required" });
+      return;
+    }
+
+    const status = typeof req.query.status === "string" && req.query.status.trim().length > 0
+      ? req.query.status.trim()
+      : "todo,in_progress,blocked";
+    const ids = typeof req.query.ids === "string" && req.query.ids.trim().length > 0
+      ? req.query.ids.split(",").map((s) => s.trim()).filter(Boolean)
+      : null;
+
+    const issuesSvc = issueService(db);
+
+    if (ids && ids.length > 0) {
+      // Bulk fetch by identifiers or IDs (agents sometimes pass ?ids=DLD-2147)
+      const results = await Promise.all(
+        ids.map((id) => issuesSvc.getByIdentifier(id).catch(() => null)),
+      );
+      res.json(results.filter(Boolean));
+      return;
+    }
+
+    const rows = await issuesSvc.list(req.actor.companyId, {
+      assigneeAgentId: req.actor.agentId,
+      status,
+    });
+
+    res.json(rows);
+  });
+
   router.get("/agents/me/inbox/mine", async (req, res) => {
     if (req.actor.type !== "agent" || !req.actor.agentId || !req.actor.companyId) {
       res.status(401).json({ error: "Agent authentication required" });
