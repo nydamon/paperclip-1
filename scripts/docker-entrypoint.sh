@@ -26,6 +26,15 @@ if [ "$(id -u)" = "0" ]; then
     if [ "$changed" = "1" ]; then
         chown -R node:node /paperclip
     fi
+
+    # Add node user to the Docker socket group so hermes-bridge.sh can
+    # `docker exec` into the hermes-agent sidecar after privilege drop.
+    DOCKER_SOCK_GID=$(stat -c '%g' /var/run/docker.sock 2>/dev/null || true)
+    if [ -n "$DOCKER_SOCK_GID" ] && [ "$DOCKER_SOCK_GID" != "0" ]; then
+        if ! usermod -aG "$DOCKER_SOCK_GID" node 2>/dev/null; then
+            echo "Warning: Failed to add node user to Docker socket group (GID $DOCKER_SOCK_GID). hermes-bridge.sh may not be able to exec into hermes-agent sidecar." >&2
+        fi
+    fi
 fi
 
 # --- Fork: tool wiring (OpenCode, gh wrapper) ---
