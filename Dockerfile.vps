@@ -81,6 +81,7 @@ RUN usermod -d /paperclip node \
   && mv /usr/local/bin/docker /usr/local/lib/paperclip/docker-real \
   && ln -sf /app/scripts/docker.sh /usr/local/bin/docker \
   && chmod +x /app/scripts/docker-entrypoint.sh /app/scripts/gh.sh /app/scripts/hermes-bridge.sh /app/scripts/docker.sh \
+  && chmod +x /app/tools/google-workspace/*.js \
   && chown -R node:node /paperclip /opt/paperclip-opencode
 
 ENV NODE_ENV=production \

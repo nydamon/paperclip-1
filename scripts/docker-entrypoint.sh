@@ -57,6 +57,14 @@ if [ -x "$gh_wrapper" ]; then
   ln -sf "$gh_wrapper" "${paperclip_bin_dir}/gh" 2>/dev/null || true
 fi
 
+# Google Workspace tools (gmail, ga4, gws-token)
+gws_tools_dir="/app/tools/google-workspace"
+if [ -d "$gws_tools_dir" ]; then
+  for tool in "$gws_tools_dir"/*.js; do
+    [ -f "$tool" ] && ln -sf "$tool" "${paperclip_bin_dir}/$(basename "$tool")" 2>/dev/null || true
+  done
+fi
+
 # Drop to node user if running as root; otherwise exec directly.
 if [ "$(id -u)" = "0" ] && command -v gosu >/dev/null 2>&1; then
     exec gosu node "$@"
