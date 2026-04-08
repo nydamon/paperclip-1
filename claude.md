@@ -372,13 +372,20 @@ Server-side gates enforce code quality workflows for agent-authored issues. All 
 | Transition | Requirement |
 |------------|-------------|
 | → `in_review` | At least one `issue_work_products` record of type `branch`, `commit`, or `pull_request` |
-| → `done` | A `pull_request` work product with status `active`, `ready_for_review`, `approved`, or `merged` |
+| → `done` | A `pull_request` work product with valid GitHub PR URL, OR a `commit` work product with valid GitHub commit URL (hotfix fallback) |
+
+**Hotfix commit fallback (PR #206):** When no PR work product exists, the gate accepts a verified commit with a valid GitHub commit URL. This prevents dead-end scenarios where hotfixes pushed directly to main can never close via the API. Logs a warning when the fallback path is used.
+
+**Work product registration:** Agents must explicitly call `POST /api/issues/:id/work-products` after pushing code. The system does not auto-detect pushes. Gate error messages include the exact API endpoint and required fields. AGENTS.md Code Delivery Protocol has full curl examples (PR #210).
 
 ### QA gate (`assertQAGate`)
 
 | Transition | Requirement |
 |------------|-------------|
+| → `done` (code issues) | Issue must have been in `in_review` status at some point (`done_requires_review_cycle` gate) |
 | → `done` | A comment matching `/\bqa[\s:]+pass(ed)?\b/i` from an authenticated author who is NOT the issue assignee |
+
+**Review cycle gate (PR #206):** Code issues (with `executionWorkspaceId`) must have been through `in_review` before `done` is accepted. Prevents QA rubber-stamping without formal review handoff. Checked via activity_log for an `issue.updated` entry with status `in_review`. Non-code issues skip this check.
 
 **Self-QA prevention:** The assigned agent's own `QA: PASS` comments are ignored. A different agent or board user must approve.
 
@@ -396,22 +403,26 @@ For UI/simulation/call features, QA must: log in, navigate to the feature, perfo
 
 Agents must include a comment when changing status or assignee. Returns 422 with gate `comment_required` if either field changes without a `comment` in the request body. Board users bypass this gate. Non-status/non-assignee updates (title, priority, etc.) do not require a comment.
 
-### Browse evidence gates (v1 — interim regex control)
+### Browse evidence gates (v1.1 — screenshot-primary)
 
 Code issues (with `executionWorkspaceId`) require interactive browser testing evidence for status transitions. Non-code issues are exempt.
 
 | Gate | Transition | Requirements | Activity log action |
 |------|-----------|-------------|-------------------|
-| `in_review_requires_browse_evidence` | → `in_review` | Browse command text in actor's comment + image attachment by actor (both from current review cycle) | `issue.evidence_gate_blocked` |
-| `done_requires_qa_browse_evidence` | → `done` | Browse command text + image attachment from the **same actor** who posted `QA: PASS` (current review cycle) | `issue.qa_evidence_gate_blocked` |
+| `in_review_requires_browse_evidence` | → `in_review` | Image attachment by actor (primary). Browse text in comment is supporting but not required if screenshot exists. | `issue.evidence_gate_blocked` |
+| `done_requires_qa_browse_evidence` | → `done` | Image attachment from the **same actor** who posted `QA: PASS`. No time window — any screenshot from the QA reviewer on the issue suffices. | `issue.qa_evidence_gate_blocked` |
 
-**Timing validation:** Evidence must have `createdAt` >= issue's `updatedAt` (resets on status/assignee change). Stale evidence from previous cycles is rejected.
+**Screenshots are primary evidence (PRs #212, #215).** Image attachments prove interactive testing occurred. Browse text pattern matching is a supporting signal but is no longer required when screenshots are uploaded. Text-only (no image) is still rejected.
+
+**No timing drift (PR #215).** The QA evidence gate previously used `issue.updatedAt` as the time anchor, but every failed gate attempt bumped `updatedAt` — eventually invalidating all prior evidence and making the issue permanently impossible to close via API. Now checks for screenshots from the QA reviewer without a time window.
+
+**Engineer evidence gate** still uses `issue.updatedAt` for the time window (less problematic since engineers typically upload evidence and transition in the same heartbeat).
 
 **Same-actor binding:** QA evidence must come from the QA PASS author. Evidence from a different agent does not satisfy the gate.
 
 **Board override:** Board users bypass all evidence gates (standard pattern).
 
-**This is a v1 interim control.** The regex (`BROWSE_EVIDENCE_PATTERN`) detects common browser-test command patterns. It is gameable with canned text and may miss novel workflows. The v2 path is structured evidence tokens from the browser-test CLI.
+**Browse evidence pattern (v1.1):** Matches `browser-test headless/headed`, `goto https:`, `snapshot`, `gstack`, `playwright`, `VERIFIED`, `health score`, `browser verification/testing`, `console errors`, `screenshot attached/saved`, `DOM dump/snapshot`, and standard dogfood skill patterns.
 
 ### Workspace policy enablement
 
@@ -440,17 +451,18 @@ Agents follow a forward-only state machine. Terminal states (done, cancelled) ca
 3. Assignment policy
 4. Checkout ownership
 5. Transition gate — status state machine
-6. Delivery gate — work product requirements
-7. **Engineer evidence gate** — browse evidence for `in_review` (code issues)
-8. QA gate — QA PASS requirement
-9. **QA browse evidence gate** — browse evidence from QA reviewer for `done` (code issues)
-10. Comment-required gate
+6. Delivery gate — work product requirements (+ hotfix commit fallback)
+7. **Engineer evidence gate** — screenshot for `in_review` (code issues)
+8. **Review cycle gate** — code issues must have been in `in_review` before `done`
+9. QA gate — QA PASS requirement
+10. **QA browse evidence gate** — screenshot from QA reviewer for `done` (code issues)
+11. Comment-required gate
 
 This ensures the handoff check runs before any other validation, and evidence gates run adjacent to their related quality gates.
 
 ### Escape hatches (all gates)
 
-- **Non-code issues**: Issues without `executionWorkspaceId` skip delivery + QA gates (transition gate always applies)
+- **Non-code issues**: Issues without `executionWorkspaceId` skip delivery + QA + evidence + review cycle gates (transition gate always applies)
 - **Board actors**: Only `req.actor.type === "agent"` is gated — board users always bypass
 
 ### Observability
@@ -459,10 +471,11 @@ Rejected transitions are logged in the activity log:
 - `issue.review_handoff_blocked` — in_review without assignee change
 - `issue.transition_blocked` — invalid agent state transition
 - `issue.delivery_gate_blocked` — missing work products
-- `issue.evidence_gate_blocked` — missing browse evidence for in_review transition
-- `issue.qa_gate_blocked` — missing QA approval
-- `issue.qa_evidence_gate_blocked` — missing browse evidence from QA reviewer for done transition
+- `issue.evidence_gate_blocked` — missing browse evidence/screenshot for in_review transition
+- `issue.qa_gate_blocked` — missing QA approval or review cycle (`done_requires_review_cycle` or `done_requires_qa_pass`)
+- `issue.qa_evidence_gate_blocked` — missing screenshot from QA reviewer for done transition
 - `issue.comment_required_blocked` — status/assignee change without comment
+- `issue.db_bypass_detected` — issue closed via direct SQL, bypassing all gates (system sweeper)
 
 ### Work product URL verification (PR #124)
 
@@ -514,21 +527,27 @@ Board users bypass all URL validation.
 
 ### Key files
 
-- `server/src/routes/issues.ts` — `assertAgentTransition()`, `assertDeliveryGate()`, `assertQAGate()`, `assertAgentAssignmentPolicy()`, `assertAgentCommentRequired()`, URL patterns, creation-time validation
+- `server/src/routes/issues.ts` — `assertAgentTransition()`, `assertDeliveryGate()`, `assertQAGate()`, `assertEngineerBrowseEvidence()`, `assertQABrowseEvidence()`, `assertAgentAssignmentPolicy()`, `assertAgentCommentRequired()`, URL patterns, creation-time validation
+- `server/src/services/issues.ts` — `hasReachedStatus()` (activity log query for review cycle gate)
+- `server/src/services/heartbeat.ts` — `detectDirectDbClosures()` (DB bypass sweeper)
 - `server/src/utils/agent-dispatchability.ts` — `isDispatchableAgent()` shared predicate
 - `server/src/__tests__/transition-gate.test.ts` — 12 transition gate tests
-- `server/src/__tests__/delivery-gate.test.ts` — 10 delivery gate tests (including URL verification)
-- `server/src/__tests__/qa-gate.test.ts` — 13 QA gate tests (including 3 self-QA prevention cases)
+- `server/src/__tests__/delivery-gate.test.ts` — 13 delivery gate tests (including URL verification + hotfix commit fallback)
+- `server/src/__tests__/qa-gate.test.ts` — 18 QA gate tests (self-QA prevention + review cycle gate)
 - `server/src/__tests__/assignment-policy-gate.test.ts` — 21 assignment policy tests
 - `server/src/__tests__/comment-required-gate.test.ts` — 7 comment-required gate tests
 - `server/src/__tests__/review-handoff-gate.test.ts` — 8 review handoff gate tests
 - `server/src/__tests__/agent-dispatchability.test.ts` — 8 dispatchability predicate tests
 - `server/src/__tests__/mention-agent-matching.test.ts` — 19 mention resolution tests
 - `server/src/__tests__/work-product-verification.test.ts` — 11 work product URL verification tests
-- `server/src/__tests__/browse-evidence-gate.test.ts` — 14 browse evidence gate tests (8 engineer + 6 QA)
+- `server/src/__tests__/browse-evidence-gate.test.ts` — 15 browse evidence gate tests (8 engineer + 7 QA)
 - `server/src/services/workspace-runtime.ts` — workspace ready comment
-- `server/src/onboarding-assets/default/AGENTS.md` — Code Delivery Protocol + QA Approval Protocol + Assignment Policy
+- `server/src/onboarding-assets/default/AGENTS.md` — Code Delivery Protocol (with work product registration curl examples) + QA Approval Protocol (with screenshot upload workflow + QA timing) + Assignment Policy
 - `server/src/onboarding-assets/ceo/HEARTBEAT.md` — CEO delivery/QA enforcement guidance
+- `skills/paperclip/SKILL.md` — work product endpoints in key endpoint table
+- `skills/paperclip/references/api-reference.md` — full Work Products section with examples
+- `skills/dogfood/SKILL.md` — screenshot upload step in issue documentation workflow
+- `skills/issue-attachments/SKILL.md` — Step 0 upload workflow for evidence screenshots
 - `AGENTS.md` — Definition of Done items 5–6
 - `doc/plans/paperclip-enforceable-system-design-v3.md` — Architecture decision record
 
@@ -605,6 +624,28 @@ When the server container restarts (deploys, health checks, etc.), all active ag
 **Location:** `server/src/services/heartbeat.ts`, `recoverProcessLostAgents()` method.
 
 **Test file:** `server/src/__tests__/process-lost-recovery.test.ts` — 5 unit tests.
+
+---
+
+## DB bypass detection sweeper (PR #206, dedup fix PR #209)
+
+`detectDirectDbClosures()` in `server/src/services/heartbeat.ts` runs on every scheduler tick (~30s) via `server/src/index.ts`. It detects issues closed to `done` or `cancelled` via direct SQL UPDATE (bypassing the API and all gates) by checking for missing `issue.updated` activity log entries.
+
+**Behavior:**
+- Scans issues in `done`/`cancelled` status updated in the last 60 minutes
+- Skips issues already flagged (dedup — checks for existing `issue.db_bypass_detected` entry)
+- For each unflagged issue, checks if an `issue.updated` activity log entry with the terminal status exists
+- If missing: creates `issue.db_bypass_detected` activity log entry (visible in issue audit trail)
+- Logs a warning with affected issue identifiers
+
+**Activity log entry:**
+- Action: `issue.db_bypass_detected`
+- Actor: `system` / `db-bypass-detector`
+- Details include status, detection timestamp, and governance violation note
+
+**Why:** Audit on 2026-04-06 revealed 67% of code issues were closed via direct `docker exec psql` SQL, bypassing all delivery, QA, evidence, and transition gates. The sweeper makes every bypass visible in the audit trail.
+
+**Location:** `server/src/services/heartbeat.ts`, `detectDirectDbClosures()` method. Wired in `server/src/index.ts`.
 
 ---
 

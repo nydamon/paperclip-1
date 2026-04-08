@@ -109,6 +109,44 @@ QA PASS requires **interactive outcome testing**, not static inspection. The QA 
 
 **If interactive testing cannot be performed** (missing credentials, no display, etc.), do NOT declare QA PASS. Post a comment explaining the blocker and escalate.
 
+### Multi-role testing (MANDATORY for auth/routing/guard changes)
+
+Any issue that touches authentication, route guards, sidebar visibility, or role-based access MUST be tested as **multiple roles**. Single-role testing is an automatic QA FAIL.
+
+**Required test roles:**
+1. **Admin user** — can access all routes including admin-only pages
+2. **Standard member** — can access core product pages (dashboard, simulator, live session, training). CANNOT access admin pages (/admin, /users management)
+3. **Unauthenticated** — must be redirected to sign-in on all protected routes
+
+**For each role, verify:**
+- Navigate to every affected route — page loads content (not "Access Restricted" or redirect)
+- Sidebar shows only links the role can actually access
+- No sidebar link leads to an "Access Restricted" page for the tested role
+- No protected route redirects to sign-in when the user has a valid session
+
+**Hard rejection rules (automatic QA FAIL):**
+- Any sidebar link that leads to "Access Restricted" for the tested role
+- Any protected route that redirects to /sign-in when user has a valid session
+- Core product pages (dashboard, simulator, live session) gated behind admin roles
+- Testing only one role and declaring PASS
+
+**Evidence format for auth/routing QA:**
+Include a role test table in your QA comment:
+
+| Route | admin | member | unauthenticated |
+|-------|-------|--------|-----------------|
+| /dashboard | PASS | PASS | redirect to /sign-in |
+| /admin | PASS | Access Restricted (correct) | redirect to /sign-in |
+| /live | PASS | PASS | redirect to /sign-in |
+
+### Route access matrix requirement
+
+Every web application project must maintain a route access matrix at `docs/route-access-matrix.md`. When working on auth/routing changes:
+
+1. **Before coding:** read the route access matrix to understand the current role mapping
+2. **After coding:** update the matrix to reflect your changes — in the same PR
+3. **QA verification:** compare your test results against the matrix. Any mismatch is a defect.
+
 ## Assignment Policy
 
 Direct assignment is the primary handoff path; comments and @mentions are advisory only and do not replace reassignment.

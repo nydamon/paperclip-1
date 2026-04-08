@@ -161,6 +161,38 @@ When adding endpoints:
 - Use company selection context for company-scoped pages
 - Surface failures clearly; do not silently ignore API errors
 
+### Route Guard Standards (all web applications)
+
+These rules apply to every web application the team builds — ViraCue, Paperclip board UI, and any future product.
+
+**1. Default-open, selectively restrict.** All routes start with basic authentication only (e.g. `RequireAuth`). Admin gates (`RequireOrgAdmin`, `RequireSuperAdmin`, etc.) are added only to genuinely administrative routes — user management, org settings, billing configuration. Core product pages (dashboard, simulator, live session, training) are NEVER admin-gated.
+
+**2. Sidebar visibility must match route guards.** If a route uses an admin guard, the sidebar link to that route must check the same condition. Shipping a guard without hiding the corresponding sidebar link is incomplete work. Shipping a sidebar link to a route the user can't access is a bug.
+
+**3. Every web project must maintain a route access matrix.** The matrix is a living document at `docs/route-access-matrix.md` (or equivalent path in the project repo) that maps every route to its required role, guard component, and sidebar visibility. Format:
+
+| Route | Auth Required | Min Role | Guard Component | Sidebar Visible To |
+|-------|--------------|----------|-----------------|-------------------|
+| /dashboard | Yes | any authenticated | RequireAuth | all |
+| /admin | Yes | super_admin | RequireSuperAdmin | super_admin |
+| /users | Yes | org:admin | RequireOrgAdmin | org:admin |
+
+Every row must have both the route guard AND the sidebar visibility — they must match.
+
+**4. Any PR that adds or changes a route guard, sidebar link, or auth middleware MUST update the route access matrix in the same PR.** PR reviewers check the matrix entry before approving. A PR that changes guards without updating the matrix is incomplete.
+
+**5. PRs touching auth/routing must include a role test table.** See the PR template checklist for the required format. The engineer must verify each role can access the routes it should and cannot access routes it shouldn't.
+
+### Playwright Test Requirements (all web applications)
+
+Every web application with authentication MUST have:
+
+**1. Role-matrix smoke test** — an automated test that verifies each role can access permitted routes and is blocked from restricted routes. Test matrix must cover at minimum: admin user, standard member, and unauthenticated visitor. Test file should live at `tests/webapp/route-access.spec.ts` or equivalent.
+
+**2. Onboarding/critical-path smoke test** — an automated test that walks the primary user journey end-to-end (e.g., sign up -> onboarding -> dashboard -> first feature use). This test must run on PRs touching auth or onboarding files.
+
+**3. Tests must use the route access matrix as their source of truth.** If the matrix says a member can access `/dashboard`, the test asserts it. If the matrix says a member cannot access `/admin`, the test asserts a redirect or access-denied page.
+
 ## 11. SSH Access
 
 Agents with infrastructure responsibilities may SSH into assigned servers using key-based authentication only.
@@ -325,6 +357,8 @@ A change is done when all are true:
 5. Code is pushed to a remote branch and a pull request is created (enforced by delivery gate for agent-authored code tasks)
 6. **Engineer has verified the fix interactively** — the actual user flow was performed in a headed browser before handoff to QA. Evidence (screenshot, test output) included in handoff comment.
 7. QA approval comment (`QA: PASS`) from a different agent or board user exists on the issue (enforced by QA gate — self-approval is blocked). **QA PASS must be based on interactive outcome testing** — grepping code, checking HTTP status codes, or zero-console-errors-on-load alone is not sufficient.
+8. **For auth/routing/guard changes:** route access matrix updated, role test table completed in PR, sidebar visibility verified to match guards.
+9. **For auth/routing/guard changes:** QA tested as BOTH admin AND non-admin roles. Single-role testing is an automatic QA FAIL.
 
 ## 14. Learned Rules
 

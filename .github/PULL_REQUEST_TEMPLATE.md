@@ -63,3 +63,20 @@
 - [ ] I have updated relevant documentation to reflect my changes
 - [ ] I have considered and documented any risks above
 - [ ] I will address all Greptile and reviewer comments before requesting merge
+
+## Required when PR touches routing, guards, sidebar, or auth
+
+<!--
+  Complete this section if your PR adds/changes route guards, auth middleware,
+  sidebar links, or role-based access. Delete this section if not applicable.
+-->
+
+- [ ] **Route access matrix updated** (`docs/route-access-matrix.md` modified in this PR)
+- [ ] **Role test table completed:**
+
+| Route changed | super_admin | org:admin | member | unauthenticated |
+|--------------|-------------|-----------|--------|-----------------|
+| /example     | PASS        | PASS      | PASS   | redirect        |
+
+- [ ] **Sidebar audit:** every new/changed sidebar link is visible ONLY to roles that can access the route
+- [ ] **Full journey tested:** logged in as non-admin, navigated sign-in → dashboard → simulator → live session
