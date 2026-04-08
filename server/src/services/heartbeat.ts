@@ -4695,16 +4695,21 @@ export function heartbeatService(db: Db) {
         );
 
       const bypassed: Array<{ identifier: string | null; status: string }> = [];
+      const reverted: Array<{ identifier: string | null }> = [];
 
       for (const issue of recentlyClosed) {
-        // Skip if already flagged — prevents duplicate entries every sweep cycle
+        // Dedup: skip if already flagged for THIS closure (detection created after
+        // the issue's current updatedAt). This allows re-detection after reverts
+        // where updatedAt changes.
+        const issueUpdatedMs = new Date(issue.updatedAt).getTime() - 1000;
         const [alreadyFlagged] = await db
-          .select({ id: activityLog.id })
+          .select({ id: activityLog.id, createdAt: activityLog.createdAt })
           .from(activityLog)
           .where(
             and(
               eq(activityLog.entityId, issue.id),
               eq(activityLog.action, "issue.db_bypass_detected"),
+              gte(activityLog.createdAt, new Date(issueUpdatedMs)),
             ),
           )
           .limit(1);
@@ -4738,6 +4743,59 @@ export function heartbeatService(db: Db) {
               note: "This issue was closed via direct database UPDATE, bypassing all API gates (delivery, QA, evidence, transition). This is a governance violation.",
             },
           });
+
+          // Auto-revert blocked→done bypasses. A blocked issue marked done without
+          // resolving the blocker obscures real problems. Check if the last API-set
+          // status was "blocked" — if so, revert to blocked.
+          if (issue.status === "done") {
+            const [lastApiStatus] = await db
+              .select({ details: activityLog.details })
+              .from(activityLog)
+              .where(
+                and(
+                  eq(activityLog.entityId, issue.id),
+                  eq(activityLog.action, "issue.updated"),
+                  sql`${activityLog.details}->>'status' IS NOT NULL`,
+                ),
+              )
+              .orderBy(desc(activityLog.createdAt))
+              .limit(1);
+
+            const prevStatus = lastApiStatus?.details
+              && typeof lastApiStatus.details === "object"
+              && "status" in lastApiStatus.details
+              ? (lastApiStatus.details as Record<string, unknown>).status
+              : null;
+
+            if (prevStatus === "blocked") {
+              await db
+                .update(issues)
+                .set({ status: "blocked", updatedAt: new Date() })
+                .where(eq(issues.id, issue.id));
+
+              reverted.push({ identifier: issue.identifier });
+
+              await logActivity(db, {
+                companyId: issue.companyId,
+                actorType: "system",
+                actorId: "db-bypass-detector",
+                action: "issue.blocked_bypass_reverted",
+                entityType: "issue",
+                entityId: issue.id,
+                details: {
+                  revertedFrom: "done",
+                  revertedTo: "blocked",
+                  note: "This issue was in blocked status and was closed as done via direct SQL without resolving the blocker. Automatically reverted to blocked.",
+                },
+              });
+
+              publishLiveEvent({
+                companyId: issue.companyId,
+                type: "activity.logged",
+                payload: { issueId: issue.id, action: "issue.blocked_bypass_reverted" },
+              });
+            }
+          }
         }
       }
 
@@ -4747,7 +4805,13 @@ export function heartbeatService(db: Db) {
           "detected issues closed via direct DB UPDATE (bypassing API gates)",
         );
       }
-      return { detected: bypassed.length };
+      if (reverted.length > 0) {
+        logger.warn(
+          { count: reverted.length, issues: reverted },
+          "auto-reverted blocked→done SQL bypasses back to blocked",
+        );
+      }
+      return { detected: bypassed.length, reverted: reverted.length };
     },
   };
 }
