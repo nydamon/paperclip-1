@@ -671,6 +671,18 @@ export async function startServer(): Promise<StartedServer> {
           logger.error({ err }, "process_lost agent recovery sweep failed");
         });
 
+      // Expire stale agent sessions to prevent echo-chamber behavior.
+      void heartbeat
+        .expireStaleAgentSessions()
+        .then((result) => {
+          if (result.runtimeSessionsCleared > 0 || result.taskSessionsPruned > 0) {
+            logger.info({ ...result }, "stale agent session sweep completed");
+          }
+        })
+        .catch((err) => {
+          logger.error({ err }, "stale agent session sweep failed");
+        });
+
       // Detect issues closed via direct DB UPDATE (bypassing API gates).
       void heartbeat
         .detectDirectDbClosures()

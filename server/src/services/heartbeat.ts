@@ -4673,6 +4673,50 @@ export function heartbeatService(db: Db) {
     },
 
     /**
+     * Clear stale agent sessions that cause the "echo chamber" problem.
+     * When an agent's runtime session (the conversation file) is old, the LLM
+     * resumes from stale context and may repeat outdated conclusions instead of
+     * re-checking its inbox. This sweeper NULLs out session_id on agents whose
+     * session hasn't been updated in over 4 hours, forcing a fresh start.
+     * Also prunes agent_task_sessions older than 48 hours to prevent unbounded growth.
+     */
+    async expireStaleAgentSessions() {
+      // Clear runtime session pointers older than 4 hours
+      const staleRuntimeResult = await db
+        .update(agentRuntimeState)
+        .set({ sessionId: null })
+        .where(
+          and(
+            isNotNull(agentRuntimeState.sessionId),
+            lte(agentRuntimeState.updatedAt, sql`now() - interval '4 hours'`),
+          ),
+        )
+        .returning({ agentId: agentRuntimeState.agentId });
+
+      // Prune task sessions older than 48 hours
+      const staleTaskResult = await db
+        .delete(agentTaskSessions)
+        .where(
+          lte(agentTaskSessions.updatedAt, sql`now() - interval '48 hours'`),
+        )
+        .returning({ id: agentTaskSessions.id });
+
+      if (staleRuntimeResult.length > 0 || staleTaskResult.length > 0) {
+        logger.info(
+          {
+            runtimeSessionsCleared: staleRuntimeResult.length,
+            taskSessionsPruned: staleTaskResult.length,
+          },
+          "expired stale agent sessions",
+        );
+      }
+      return {
+        runtimeSessionsCleared: staleRuntimeResult.length,
+        taskSessionsPruned: staleTaskResult.length,
+      };
+    },
+
+    /**
      * Detect issues closed to "done" or "cancelled" via direct DB UPDATE
      * (bypassing the API and all gates). These have no corresponding
      * `issue.updated` activity log entry with the terminal status.
