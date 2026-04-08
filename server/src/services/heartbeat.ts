@@ -3613,8 +3613,11 @@ export function heartbeatService(db: Db) {
         // Gate-block backoff: skip dispatch to issues that keep hitting gate blocks.
         // Counter is incremented by the PATCH /issues/:id gate handlers and resets
         // on status or assignee changes.
+        // Board user wakeups bypass backoff — a human comment is an explicit instruction
+        // that should always reach the agent regardless of prior gate failures.
         const GATE_BLOCK_THRESHOLD = 3;
-        if (issue.gateBlockCount >= GATE_BLOCK_THRESHOLD) {
+        const isBoardUserWake = opts.requestedByActorType === "user";
+        if (issue.gateBlockCount >= GATE_BLOCK_THRESHOLD && !isBoardUserWake) {
           await tx.insert(agentWakeupRequests).values({
             companyId: agent.companyId,
             agentId,
@@ -3629,6 +3632,14 @@ export function heartbeatService(db: Db) {
             finishedAt: new Date(),
           });
           return { kind: "skipped" as const };
+        }
+
+        // Board user wakeup resets gate block counter so the agent gets a fresh slate
+        if (isBoardUserWake && issue.gateBlockCount > 0) {
+          await tx
+            .update(issues)
+            .set({ gateBlockCount: 0, updatedAt: new Date() })
+            .where(eq(issues.id, issueId));
         }
 
         let activeExecutionRun = issue.executionRunId

@@ -249,6 +249,49 @@ describe("gate-block backoff", () => {
     expect(updated.status).toBe("in_review");
   });
 
+  it("board user wakeup bypasses gate block backoff", async () => {
+    const { agentId, issueId } = await seedIssueWithGateBlocks({ gateBlockCount: 5 });
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.wakeup(agentId, {
+      source: "automation",
+      triggerDetail: "test",
+      reason: "assignment",
+      contextSnapshot: { issueId },
+      requestedByActorType: "user",
+      requestedByActorId: randomUUID(),
+    });
+
+    // Board user wakeup should NOT be skipped despite high gate block count
+    expect(result).not.toBeNull();
+
+    // Gate block counter should be reset to 0
+    const [updated] = await db.select().from(issues).where(eq(issues.id, issueId));
+    expect(updated.gateBlockCount).toBe(0);
+  });
+
+  it("agent wakeup is still skipped by gate block backoff", async () => {
+    const { agentId, issueId } = await seedIssueWithGateBlocks({ gateBlockCount: 5 });
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.wakeup(agentId, {
+      source: "automation",
+      triggerDetail: "test",
+      reason: "assignment",
+      contextSnapshot: { issueId },
+      requestedByActorType: "agent",
+      requestedByActorId: randomUUID(),
+    });
+
+    // Agent-originated wakeup should still be skipped
+    expect(result).toBeNull();
+
+    const wakeups = await db.select().from(agentWakeupRequests);
+    const skipped = wakeups.find((w) => w.reason?.startsWith("gate_block_backoff"));
+    expect(skipped).toBeTruthy();
+    expect(skipped!.status).toBe("skipped");
+  });
+
   it("timer wakes bypass the issue-specific gate check (no issueId)", async () => {
     // Timer wakes go through the non-issue pathway in enqueueWakeup.
     // Even if the agent has issues with high gateBlockCount, timer wakes
