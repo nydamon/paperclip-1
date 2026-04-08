@@ -3536,10 +3536,12 @@ export function heartbeatService(db: Db) {
     // Comment retrigger cooldown: skip wakeup if any run for this
     // agent+issue completed within the last N minutes. Prevents agent
     // ping-pong where A comments → wakes B → B comments → wakes A → repeat.
+    // @mentions are exempt — they are deliberate requests for action and
+    // should always wake the target agent regardless of recent activity.
     const COMMENT_RETRIGGER_COOLDOWN_MINUTES = 15;
     if (
       issueId &&
-      (reason === "issue_comment_retrigger" || reason === "issue_comment_mentioned")
+      reason === "issue_comment_retrigger"
     ) {
       const cooldownCutoff = new Date(Date.now() - COMMENT_RETRIGGER_COOLDOWN_MINUTES * 60_000);
       try {

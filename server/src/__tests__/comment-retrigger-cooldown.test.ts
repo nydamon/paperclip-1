@@ -221,7 +221,7 @@ describe("comment retrigger cooldown", () => {
     expect(result).not.toBeNull();
   });
 
-  it("skips issue_comment_mentioned wakeup during cooldown", async () => {
+  it("does NOT skip issue_comment_mentioned during cooldown (mentions bypass cooldown)", async () => {
     const { agentId, issueId, companyId } = await seedAgentAndIssue();
 
     // Insert a wakeup run that finished 3 minutes ago
@@ -241,11 +241,9 @@ describe("comment retrigger cooldown", () => {
       contextSnapshot: { issueId },
     });
 
-    expect(result).toBeNull();
-
-    const wakeups = await db.select().from(agentWakeupRequests);
-    const skipped = wakeups.find((w) => w.reason?.startsWith("comment_retrigger_cooldown"));
-    expect(skipped).toBeTruthy();
+    // @mentions are deliberate requests for action — they should always
+    // wake the target agent regardless of recent activity.
+    expect(result).not.toBeNull();
   });
 
   it("does not affect non-comment wakeup reasons", async () => {
