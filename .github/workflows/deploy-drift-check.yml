@@ -1,0 +1,50 @@
+name: Deploy Drift Check
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          printf '%s\n' "${{ secrets.VULTR_SSH_PRIVATE_KEY }}" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "${{ secrets.VULTR_KNOWN_HOSTS }}" > "$HOME/.ssh/known_hosts"
+          chmod 644 "$HOME/.ssh/known_hosts"
+
+      - name: Resolve expected SHA
+        id: expected-sha
+        run: |
+          set -euo pipefail
+          expected_sha=$(git ls-remote origin refs/heads/master | awk '{print $1}')
+          [ -n "$expected_sha" ] || {
+            echo "Failed to resolve origin/master SHA" >&2
+            exit 1
+          }
+          echo "sha=$expected_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Run drift check
+        run: |
+          set -euo pipefail
+          chmod +x ./scripts/check-deploy-drift.sh
+          ./scripts/check-deploy-drift.sh \
+            --host "${{ secrets.VULTR_HOST }}" \
+            --user "${{ secrets.VULTR_USER }}" \
+            --expected-sha "${{ steps.expected-sha.outputs.sha }}" \
+            --retries 20 \
+            --retry-interval-seconds 30

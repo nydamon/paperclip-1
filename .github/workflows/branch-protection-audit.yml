@@ -1,0 +1,50 @@
+name: Branch Protection Audit
+
+on:
+  schedule:
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # GITHUB_TOKEN (bot token) cannot read branch protection — requires admin PAT
+      GH_TOKEN: ${{ secrets.REPO_ADMIN_PAT }}
+
+    steps:
+      - name: Assert enforce_admins is enabled
+        run: |
+          set -euo pipefail
+          enabled=$(gh api repos/Viraforge/paperclip/branches/master/protection/enforce_admins --jq ".enabled")
+          [ "$enabled" = "true" ] || {
+            echo "FAIL: enforce_admins is disabled" >&2
+            exit 1
+          }
+
+      - name: Assert required checks include verify and policy
+        run: |
+          set -euo pipefail
+          checks=$(gh api repos/Viraforge/paperclip/branches/master/protection/required_status_checks --jq "[.checks[].context] | sort | join(\",\")")
+          echo "Required checks: $checks"
+          echo "$checks" | grep -Eq "(^|,)verify(,|$)" || {
+            echo "FAIL: verify is not required" >&2
+            exit 1
+          }
+          echo "$checks" | grep -Eq "(^|,)policy(,|$)" || {
+            echo "FAIL: policy is not required" >&2
+            exit 1
+          }
+
+      - name: Assert force pushes are blocked
+        run: |
+          set -euo pipefail
+          force_pushes_enabled=$(gh api repos/Viraforge/paperclip/branches/master/protection --jq ".allow_force_pushes.enabled")
+          [ "$force_pushes_enabled" = "false" ] || {
+            echo "FAIL: force pushes are enabled" >&2
+            exit 1
+          }

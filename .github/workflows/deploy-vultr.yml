@@ -1,0 +1,414 @@
+name: Deploy Vultr
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-vultr-master
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build UI
+        run: pnpm --filter @paperclipai/ui build
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push server image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.vps
+          push: true
+          tags: |
+            ghcr.io/viraforge/paperclip:${{ github.sha }}
+            ghcr.io/viraforge/paperclip:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            COMMIT_SHA=${{ github.sha }}
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VULTR_HOST: ${{ secrets.VULTR_HOST }}
+      VULTR_USER: ${{ secrets.VULTR_USER }}
+      VULTR_TARGET: /opt/paperclip
+      VULTR_ENV_FILE: /opt/paperclip/.env
+      VULTR_RELEASE_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+      VULTR_RELEASE_DIR: /opt/paperclip/releases/${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+      PAPERCLIP_SERVER_IMAGE: ghcr.io/viraforge/paperclip:${{ github.sha }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Deploy guard (clean tree + pinned commit)
+        run: |
+          set -euo pipefail
+          ./scripts/deploy-guard.sh --require-ref "${GITHUB_SHA}" --allow-detached-head
+
+      - name: Configure SSH key
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          printf '%s\n' "${{ secrets.VULTR_SSH_PRIVATE_KEY }}" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+
+      - name: Configure known_hosts
+        run: |
+          set -euo pipefail
+          printf '%s\n' "${{ secrets.VULTR_KNOWN_HOSTS }}" > "$HOME/.ssh/known_hosts"
+          chmod 644 "$HOME/.ssh/known_hosts"
+
+      - name: Configure SSH connection reuse
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh/controlmasters"
+          chmod 700 "$HOME/.ssh/controlmasters"
+          cat > "$HOME/.ssh/config" <<EOF
+          Host vultr-deploy
+            HostName ${VULTR_HOST}
+            User ${VULTR_USER}
+            IdentityFile $HOME/.ssh/id_ed25519
+            BatchMode yes
+            StrictHostKeyChecking yes
+            UserKnownHostsFile $HOME/.ssh/known_hosts
+            ConnectTimeout 10
+            ConnectionAttempts 3
+            ControlMaster auto
+            ControlPersist 10m
+            ControlPath $HOME/.ssh/controlmasters/%C
+          EOF
+          chmod 600 "$HOME/.ssh/config"
+
+      - name: Verify SSH access
+        run: |
+          set -euo pipefail
+          ssh -F "$HOME/.ssh/config" \
+            vultr-deploy \
+            "echo SSH_OK && hostname && whoami"
+
+      - name: Prepare release directory on VPS
+        run: |
+          set -euo pipefail
+          ssh -F "$HOME/.ssh/config" \
+            vultr-deploy \
+            "mkdir -p '$VULTR_RELEASE_DIR'"
+
+      - name: Sync repository to VPS
+        run: |
+          set -euo pipefail
+          rsync -avz \
+            --timeout=30 \
+            --exclude .git \
+            --exclude node_modules \
+            --exclude data \
+            --exclude .worktrees \
+            --exclude ui/.vite \
+            -e "ssh -F $HOME/.ssh/config -o ConnectTimeout=10" \
+            ./ \
+            "vultr-deploy:$VULTR_RELEASE_DIR/"
+
+      - name: Deploy and reload nginx
+        run: |
+          set -euo pipefail
+          # Deploy the tracked nginx config from the release dir to the live nginx sites-available path.
+          # vps-edge.conf is the source of truth; this step prevents the WS proxy block from
+          # silently disappearing after git-pull deploys (DLD-828, DLD-1602, DLD-2045).
+          ssh -F "$HOME/.ssh/config" \
+            vultr-deploy \
+            'set -euo pipefail
+            nginx_src="'"$VULTR_RELEASE_DIR"'/deploy/nginx/vps-edge.conf"
+            nginx_dest="/etc/nginx/sites-available/viracue.conf"
+            nginx_enabled="/etc/nginx/sites-enabled/viracue"
+            # Copy tracked config to live nginx path
+            cp "$nginx_src" "$nginx_dest"
+            # Enable the site (symlink if not already linked)
+            if [ ! -L "$nginx_enabled" ] && [ ! -f "$nginx_enabled" ]; then
+              ln -s "$nginx_dest" "$nginx_enabled"
+            fi
+            # Validate and reload
+            nginx -t && nginx -s reload
+            echo "NGINX_RELOAD_OK"'
+
+      - name: Backup production database
+        run: |
+          set -euo pipefail
+          ssh -F "$HOME/.ssh/config" \
+            vultr-deploy \
+            'set -euo pipefail
+            ts=$(date +%Y%m%d%H%M%S)
+            mkdir -p /opt/paperclip/db-backups
+            docker exec -i paperclip-db-1 pg_dump -U paperclip -d paperclip -Fc > "/opt/paperclip/db-backups/pre-deploy-${ts}.dump"'
+
+      - name: Authenticate VPS to GHCR and pull server image
+        run: |
+          set -euo pipefail
+          printf '%s' "${{ secrets.GITHUB_TOKEN }}" | ssh -F "$HOME/.ssh/config" \
+            vultr-deploy \
+            "docker login ghcr.io -u '${{ github.actor }}' --password-stdin && \
+             docker pull '$PAPERCLIP_SERVER_IMAGE'"
+
+      - name: Run database migrations
+        run: |
+          set -euo pipefail
+          ssh -F "$HOME/.ssh/config" \
+            vultr-deploy \
+            "set -euo pipefail
+            PAPERCLIP_SERVER_IMAGE='$PAPERCLIP_SERVER_IMAGE' \
+            docker compose --project-name paperclip --env-file '$VULTR_ENV_FILE' \
+              -f '$VULTR_RELEASE_DIR/docker-compose.vps.yml' \
+              run --rm --no-deps server pnpm db:migrate"
+
+      - name: Recreate VPS server and edge containers
+        run: |
+          set -euo pipefail
+          ssh -F "$HOME/.ssh/config" \
+            vultr-deploy \
+            "set -euo pipefail
+            # Stop edge first to cleanly release host port 80 before recreating.
+            # Without this explicit stop, docker-proxy may still hold the port when
+            # the new edge container tries to bind it, causing 'address already in use'.
+            docker compose --project-name paperclip --env-file '$VULTR_ENV_FILE' \
+              -f '$VULTR_RELEASE_DIR/docker-compose.vps.yml' \
+              stop edge || true
+            PAPERCLIP_SERVER_IMAGE='$PAPERCLIP_SERVER_IMAGE' \
+            docker compose --project-name paperclip --env-file '$VULTR_ENV_FILE' \
+              -f '$VULTR_RELEASE_DIR/docker-compose.vps.yml' \
+              up -d --force-recreate --no-deps server edge"
+
+      - name: Capture restart forensics snapshot
+        run: |
+          set -euo pipefail
+          ssh -F "$HOME/.ssh/config" \
+            vultr-deploy \
+            "set -euo pipefail
+            FORENSICS_ROOT=/opt/paperclip/forensics \
+            '$VULTR_RELEASE_DIR/scripts/capture-restart-forensics.sh'"
+
+      - name: Assert image revision provenance
+        run: |
+          set -euo pipefail
+          ssh -F "$HOME/.ssh/config" \
+            vultr-deploy \
+            'set -euo pipefail
+            running_revision=$(docker inspect paperclip-server-1 --format '"'"'{{index .Config.Labels "org.opencontainers.image.revision"}}'"'"')
+            printf "RUNNING_REVISION=%s\n" "$running_revision"
+            if [ "$running_revision" != "${{ github.sha }}" ]; then
+              printf "MISMATCH: expected %s, got %s\n" "${{ github.sha }}" "$running_revision" >&2
+              exit 1
+            fi'
+
+      - name: Validate remote compose state
+        run: |
+          set -euo pipefail
+          ssh -F "$HOME/.ssh/config" \
+            vultr-deploy \
+            "set -euo pipefail
+            PAPERCLIP_SERVER_IMAGE='$PAPERCLIP_SERVER_IMAGE' \
+            docker compose --project-name paperclip --env-file '$VULTR_ENV_FILE' \
+              -f '$VULTR_RELEASE_DIR/docker-compose.vps.yml' ps"
+
+      - name: Validate fresh server container timestamp
+        run: |
+          set -euo pipefail
+          ssh -F "$HOME/.ssh/config" \
+            vultr-deploy \
+            'set -euo pipefail
+            started_at=$(docker inspect -f '"'"'{{.State.StartedAt}}'"'"' paperclip-server-1)
+            started_epoch=$(date -u -d "$started_at" +%s)
+            now_epoch=$(date -u +%s)
+            age_seconds=$((now_epoch - started_epoch))
+            printf "CONTAINER_STARTED_AT=%s\n" "$started_at"
+            printf "CONTAINER_AGE_SECONDS=%s\n" "$age_seconds"
+            if [ "$age_seconds" -lt 0 ] || [ "$age_seconds" -gt 900 ]; then
+              echo "Server container is not fresh after recreate" >&2
+              exit 1
+            fi'
+
+      - name: Wait for remote localhost health
+        run: |
+          set -euo pipefail
+          ssh -F "$HOME/.ssh/config" \
+            vultr-deploy \
+            'set -euo pipefail
+            for attempt in $(seq 1 12); do
+              if curl --connect-timeout 5 --max-time 10 -fsS http://localhost:3100/api/health >/dev/null; then
+                exit 0
+              fi
+              sleep 5
+            done
+            echo "Timed out waiting for remote localhost health" >&2
+            exit 1'
+
+      - name: Wait for external host health
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 12); do
+            if curl --connect-timeout 5 --max-time 10 -fsS "http://$VULTR_HOST:3100/api/health" > /dev/null; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Timed out waiting for external host health" >&2
+          exit 1
+
+      - name: Wait for external port 80 edge health
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 12); do
+            if curl --connect-timeout 5 --max-time 10 -fsS "http://$VULTR_HOST/api/health" > /dev/null; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Timed out waiting for http://$VULTR_HOST/api/health (nginx edge on :80). Open TCP 80 on the VPS firewall and ensure nothing else binds host port 80." >&2
+          exit 1
+
+      - name: Validate external static asset fetch
+        run: |
+          set -euo pipefail
+          root_html=$(curl --connect-timeout 5 --max-time 10 -fsS "http://$VULTR_HOST:3100/")
+          asset_path=$(ROOT_HTML="$root_html" python3 -c "import os, re, sys; match = re.search(r'''(?:src|href)=[\"\\'](?P<path>/assets/[^\"\\'?#]+(?:\\?[^\"\\' ]*)?)[\"\\']''', os.environ['ROOT_HTML']); print(match.group('path')) if match else sys.exit(1)") || {
+            echo "No static asset path found in root HTML" >&2
+            exit 1
+          }
+          curl --connect-timeout 5 --max-time 10 -fsS "http://$VULTR_HOST:3100$asset_path" > /dev/null
+          printf 'FETCHED_ASSET=%s\n' "$asset_path"
+
+      - name: Validate OpenCode runtime env
+        run: |
+          set -euo pipefail
+          ssh -F "$HOME/.ssh/config" \
+            vultr-deploy \
+            'set -euo pipefail
+            env_output=$(docker inspect paperclip-server-1 --format '"'"'{{range .Config.Env}}{{println .}}{{end}}'"'"')
+            if printf "%s\n" "$env_output" | grep -q "^PAPERCLIP_OPENCODE_COMMAND=/"; then
+              printf "FOUND:%s\n" "PAPERCLIP_OPENCODE_COMMAND"
+            else
+              printf "MISSING_OR_INVALID:%s\n" "PAPERCLIP_OPENCODE_COMMAND" >&2
+              exit 1
+            fi
+            required_nonempty_vars="OPENCODE_CONFIG_CONTENT ZAI_API_KEY MINIMAX_API_KEY BETTER_AUTH_SECRET"
+            for required_var in $required_nonempty_vars; do
+              if printf "%s\n" "$env_output" | grep -q "^${required_var}=."; then
+                printf "FOUND_NONEMPTY:%s\n" "$required_var"
+                continue
+              fi
+              printf "MISSING_OR_EMPTY:%s\n" "$required_var" >&2
+              exit 1
+            done
+            public_url=$(printf "%s\n" "$env_output" | sed -n "s/^PAPERCLIP_PUBLIC_URL=//p" | head -n 1)
+            if [ -z "$public_url" ]; then
+              printf "MISSING_OR_EMPTY:%s\n" "PAPERCLIP_PUBLIC_URL" >&2
+              exit 1
+            fi
+            case "$public_url" in
+              http://localhost*|https://localhost*|http://127.0.0.1*|https://127.0.0.1*)
+                printf "INVALID_LOCALHOST:%s=%s\n" "PAPERCLIP_PUBLIC_URL" "$public_url" >&2
+                exit 1
+                ;;
+            esac
+            case "$public_url" in
+              http://*|https://*)
+                printf "FOUND_EXPLICIT:%s=%s\n" "PAPERCLIP_PUBLIC_URL" "$public_url"
+                ;;
+              *)
+                printf "MISSING_OR_INVALID:%s=%s\n" "PAPERCLIP_PUBLIC_URL" "$public_url" >&2
+                exit 1
+                ;;
+            esac
+            printf "PUBLIC_URL_VALID:%s\n" "$public_url"'
+
+      - name: Read recent startup logs
+        run: |
+          set -euo pipefail
+          ssh -F "$HOME/.ssh/config" \
+            vultr-deploy \
+            'set -euo pipefail
+            logs=$(docker logs --tail 200 paperclip-server-1 2>&1)
+            printf "%s\n" "$logs"
+            fatal_pattern="panic:|uncaught exception|unhandledpromiserejection|error: listen eaddrinuse|syntaxerror:|cannot find module|module_not_found|address already in use"
+            if printf "%s\n" "$logs" | grep -Eiq "$fatal_pattern"; then
+              echo "Detected fatal startup pattern in recent logs" >&2
+              exit 1
+            fi
+            success_pattern="started|listening|ready|server running|health|/api/health|GET .* 200"
+            if printf "%s\n" "$logs" | grep -Eiq "$success_pattern"; then
+              exit 0
+            fi
+            echo "Recent logs did not show a basic startup success signal" >&2
+            exit 1'
+
+      - name: Write current release and image pointers
+        run: |
+          set -euo pipefail
+          ssh -F "$HOME/.ssh/config" \
+            vultr-deploy \
+            "set -euo pipefail
+            if [ -f /opt/paperclip/current-image ]; then
+              cp /opt/paperclip/current-image /opt/paperclip/current-image-prev
+            fi
+            printf '%s' '$PAPERCLIP_SERVER_IMAGE' > /opt/paperclip/current-image.tmp
+            mv /opt/paperclip/current-image.tmp /opt/paperclip/current-image
+            printf '%s' '$VULTR_RELEASE_DIR' > /opt/paperclip/current-release.tmp
+            mv /opt/paperclip/current-release.tmp /opt/paperclip/current-release
+            printf 'CURRENT_RELEASE=%s\n' \"\$(cat /opt/paperclip/current-release)\"
+            printf 'CURRENT_IMAGE=%s\n' \"\$(cat /opt/paperclip/current-image)\""
+
+      - name: Cleanup old releases and Docker cache
+        run: |
+          set -euo pipefail
+          ssh -F "$HOME/.ssh/config" \
+            vultr-deploy \
+            'set -euo pipefail
+            releases_dir=/opt/paperclip/releases
+            backups_dir=/opt/paperclip/db-backups
+            mkdir -p "$releases_dir" "$backups_dir"
+            ls -1dt "$releases_dir"/* 2>/dev/null | awk "NR>5" | xargs -r rm -rf --
+            ls -1dt "$backups_dir"/pre-deploy-*.dump 2>/dev/null | awk "NR>10" | xargs -r rm -f --
+            prev_image=$(cat /opt/paperclip/current-image-prev 2>/dev/null || true)
+            if [ -n "$prev_image" ]; then
+              docker tag "$prev_image" paperclip-rollback:prev 2>/dev/null || true
+            fi
+            docker image prune -af || true
+            docker builder prune -af || true'

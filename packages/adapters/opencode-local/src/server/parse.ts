@@ -97,3 +97,15 @@ export function isOpenCodeUnknownSessionError(stdout: string, stderr: string): b
     haystack,
   );
 }
+
+export function isEditConcurrencyError(stdout: string, stderr: string): boolean {
+  const haystack = `${stdout}\n${stderr}`
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n");
+
+  // Matches the "Could not find oldString in file" error produced by the Edit tool
+  // when a file is modified between the LLM's read and edit steps (concurrent heartbeat race).
+  return /could not find (old_?string|the (old|original) (string|content))|oldstring not found/i.test(haystack);
+}

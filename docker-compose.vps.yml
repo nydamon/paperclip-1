@@ -1,0 +1,83 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    command:
+      - "postgres"
+      - "-c"
+      - "autovacuum_vacuum_scale_factor=0.02"
+      - "-c"
+      - "autovacuum_analyze_scale_factor=0.01"
+      - "-c"
+      - "autovacuum_naptime=30s"
+    environment:
+      POSTGRES_USER: paperclip
+      POSTGRES_PASSWORD: paperclip
+      POSTGRES_DB: paperclip
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paperclip -d paperclip"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  server:
+    image: ${PAPERCLIP_SERVER_IMAGE:?PAPERCLIP_SERVER_IMAGE must be set}
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    # 16 GiB host: 12g for server, remainder for Postgres + OS + hermes sidecar.
+    mem_limit: 12g
+    memswap_limit: 12g
+    ports:
+      - "${PAPERCLIP_PORT:-3100}:3100"
+    environment:
+      NODE_OPTIONS: "--max-old-space-size=8192"
+      DATABASE_URL: postgres://paperclip:paperclip@db:5432/paperclip
+      PORT: "3100"
+      SERVE_UI: "true"
+      PAPERCLIP_HOME: "/paperclip"
+      CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN:-}"
+      PAPERCLIP_OPENCODE_COMMAND: /paperclip/bin/opencode
+      OPENCODE_CONFIG_CONTENT: "${OPENCODE_CONFIG_CONTENT:?OPENCODE_CONFIG_CONTENT must be set}"
+      ZAI_API_KEY: "${ZAI_API_KEY:?ZAI_API_KEY must be set}"
+      MINIMAX_API_KEY: "${MINIMAX_API_KEY:?MINIMAX_API_KEY must be set}"
+      PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
+      PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
+      PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:?PAPERCLIP_PUBLIC_URL must be set}"
+      # Optional comma-separated extra hosts (e.g. VPS IP) when PUBLIC_URL is a Cloudflare hostname — deploy health checks hit the IP.
+      PAPERCLIP_ALLOWED_HOSTNAMES: "${PAPERCLIP_ALLOWED_HOSTNAMES:-}"
+      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set}"
+      # Optional Stripe test keys (see root `.env.example`, `doc/DOCKER.md`). Prefer STRIPE_TEST_* on the VPS `.env`.
+      STRIPE_TEST_PUBLISHABLE_KEY: "${STRIPE_TEST_PUBLISHABLE_KEY:-}"
+      STRIPE_TEST_SECRET_KEY: "${STRIPE_TEST_SECRET_KEY:-}"
+      STRIPE_PUBLISHABLE_KEY: "${STRIPE_PUBLISHABLE_KEY:-}"
+      STRIPE_SECRET_KEY: "${STRIPE_SECRET_KEY:-}"
+      # OpenRouter API key — needed by pi --list-models for custom model providers in models.json
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+    # gid 999 = docker group on host, needed for hermes-bridge.sh to docker-exec into hermes-agent container.
+    group_add:
+      - "999"
+    volumes:
+      - paperclip-data:/paperclip
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Port 80 reverse proxy so Cloudflare Free (no origin port override) can reach Paperclip on :3100.
+  # Use SSL/TLS mode "Flexible" in Cloudflare when the origin speaks HTTP only.
+  edge:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      - server
+    ports:
+      - "${PAPERCLIP_EDGE_HTTP_PORT:-80}:80"
+    volumes:
+      - ./deploy/nginx/vps-edge.conf:/etc/nginx/conf.d/default.conf:ro
+
+volumes:
+  pgdata:
+  paperclip-data:

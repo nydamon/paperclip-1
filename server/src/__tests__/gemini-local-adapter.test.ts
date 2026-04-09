@@ -75,6 +75,12 @@ describe("gemini_local parser", () => {
 describe("gemini_local stale session detection", () => {
   it("treats missing session messages as an unknown session error", () => {
     expect(isGeminiUnknownSessionError("", "unknown session id abc")).toBe(true);
+    expect(
+      isGeminiUnknownSessionError(
+        "",
+        'Error resuming session: Invalid session identifier "faa39838-14cf-4949-b1b3-c29a651722ac".',
+      ),
+    ).toBe(true);
     expect(isGeminiUnknownSessionError("", "checkpoint latest not found")).toBe(true);
   });
 });

@@ -1,7 +1,9 @@
 import { readConfigFile } from "./config-file.js";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import { config as loadDotenv } from "dotenv";
 import { resolvePaperclipEnvPath } from "./paths.js";
+import { maybeRepairLegacyWorktreeConfigAndEnvFiles } from "./worktree-config.js";
 import {
   AUTH_BASE_URL_MODES,
   DEPLOYMENT_EXPOSURES,
@@ -21,13 +23,58 @@ import {
   resolveDefaultStorageDir,
   resolveHomeAwarePath,
 } from "./home-paths.js";
+import { resolveStripeKeysFromProcessEnv, syncStripeStandardEnvFromResolved } from "./stripe-env.js";
 
 const PAPERCLIP_ENV_FILE_PATH = resolvePaperclipEnvPath();
 if (existsSync(PAPERCLIP_ENV_FILE_PATH)) {
   loadDotenv({ path: PAPERCLIP_ENV_FILE_PATH, override: false, quiet: true });
 }
 
+const CWD_ENV_PATH = resolve(process.cwd(), ".env");
+const isSameFile = existsSync(CWD_ENV_PATH) && existsSync(PAPERCLIP_ENV_FILE_PATH)
+  ? realpathSync(CWD_ENV_PATH) === realpathSync(PAPERCLIP_ENV_FILE_PATH)
+  : CWD_ENV_PATH === PAPERCLIP_ENV_FILE_PATH;
+if (!isSameFile && existsSync(CWD_ENV_PATH)) {
+  loadDotenv({ path: CWD_ENV_PATH, override: false, quiet: true });
+}
+
+maybeRepairLegacyWorktreeConfigAndEnvFiles();
+
 type DatabaseMode = "embedded-postgres" | "postgres";
+
+/**
+ * Union of persisted config, `PAPERCLIP_ALLOWED_HOSTNAMES`, and `PAPERCLIP_PUBLIC_URL` hostname.
+ * Previously, a non-empty env CSV replaced the file list entirely, so `paperclipai allowed-hostname`
+ * (and onboard defaults) could be ignored and lost effective hosts after env drift or redeploys.
+ */
+export function mergeAllowedHostnamesForConfig(input: {
+  fileAllowed: string[] | undefined | null;
+  envCsv: string | undefined | null;
+  publicBaseUrl: string | undefined | null;
+}): string[] {
+  const fromFile = (input.fileAllowed ?? [])
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => value.length > 0);
+  const rawEnv = input.envCsv;
+  const fromEnv =
+    rawEnv === undefined || rawEnv === null
+      ? []
+      : rawEnv
+          .split(",")
+          .map((value) => value.trim().toLowerCase())
+          .filter((value) => value.length > 0);
+  let fromPublic: string[] = [];
+  const base = input.publicBaseUrl?.trim();
+  if (base) {
+    try {
+      const hostname = new URL(base).hostname.trim().toLowerCase();
+      if (hostname) fromPublic = [hostname];
+    } catch {
+      /* invalid URL */
+    }
+  }
+  return Array.from(new Set([...fromFile, ...fromEnv, ...fromPublic]));
+}
 
 export interface Config {
   deploymentMode: DeploymentMode;
@@ -58,9 +105,15 @@ export interface Config {
   storageS3Endpoint: string | undefined;
   storageS3Prefix: string;
   storageS3ForcePathStyle: boolean;
+  feedbackExportBackendUrl: string | undefined;
+  feedbackExportBackendToken: string | undefined;
   heartbeatSchedulerEnabled: boolean;
   heartbeatSchedulerIntervalMs: number;
   companyDeletionEnabled: boolean;
+  /** Resolved from `STRIPE_TEST_*` then `STRIPE_*`; use for future billing routes (never log). */
+  stripePublishableKey: string | undefined;
+  stripeSecretKey: string | undefined;
+  telemetryEnabled: boolean;
 }
 
 export function loadConfig(): Config {
@@ -108,6 +161,14 @@ export function loadConfig(): Config {
     process.env.PAPERCLIP_STORAGE_S3_FORCE_PATH_STYLE !== undefined
       ? process.env.PAPERCLIP_STORAGE_S3_FORCE_PATH_STYLE === "true"
       : (fileStorage?.s3?.forcePathStyle ?? false);
+  const feedbackExportBackendUrl =
+    process.env.PAPERCLIP_FEEDBACK_EXPORT_BACKEND_URL?.trim() ||
+    process.env.PAPERCLIP_TELEMETRY_BACKEND_URL?.trim() ||
+    undefined;
+  const feedbackExportBackendToken =
+    process.env.PAPERCLIP_FEEDBACK_EXPORT_BACKEND_TOKEN?.trim() ||
+    process.env.PAPERCLIP_TELEMETRY_BACKEND_TOKEN?.trim() ||
+    undefined;
 
   const deploymentModeFromEnvRaw = process.env.PAPERCLIP_DEPLOYMENT_MODE;
   const deploymentModeFromEnv =
@@ -148,32 +209,11 @@ export function loadConfig(): Config {
     disableSignUpFromEnv !== undefined
       ? disableSignUpFromEnv === "true"
       : (fileConfig?.auth?.disableSignUp ?? false);
-  const allowedHostnamesFromEnvRaw = process.env.PAPERCLIP_ALLOWED_HOSTNAMES;
-  const allowedHostnamesFromEnv = allowedHostnamesFromEnvRaw
-    ? allowedHostnamesFromEnvRaw
-      .split(",")
-      .map((value) => value.trim().toLowerCase())
-      .filter((value) => value.length > 0)
-    : null;
-  const publicUrlHostname = authPublicBaseUrl
-    ? (() => {
-      try {
-        return new URL(authPublicBaseUrl).hostname.trim().toLowerCase();
-      } catch {
-        return null;
-      }
-    })()
-    : null;
-  const allowedHostnames = Array.from(
-    new Set(
-      [
-        ...(allowedHostnamesFromEnv ?? fileConfig?.server.allowedHostnames ?? []),
-        ...(publicUrlHostname ? [publicUrlHostname] : []),
-      ]
-        .map((value) => value.trim().toLowerCase())
-        .filter(Boolean),
-    ),
-  );
+  const allowedHostnames = mergeAllowedHostnamesForConfig({
+    fileAllowed: fileConfig?.server.allowedHostnames,
+    envCsv: process.env.PAPERCLIP_ALLOWED_HOSTNAMES,
+    publicBaseUrl: authPublicBaseUrl,
+  });
   const companyDeletionEnvRaw = process.env.PAPERCLIP_ENABLE_COMPANY_DELETION;
   const companyDeletionEnabled =
     companyDeletionEnvRaw !== undefined
@@ -200,6 +240,9 @@ export function loadConfig(): Config {
       fileDatabaseBackup?.dir ??
       resolveDefaultBackupDir(),
   );
+
+  const stripeKeys = resolveStripeKeysFromProcessEnv(process.env);
+  syncStripeStandardEnvFromResolved(process.env, stripeKeys);
 
   return {
     deploymentMode,
@@ -240,8 +283,13 @@ export function loadConfig(): Config {
     storageS3Endpoint,
     storageS3Prefix,
     storageS3ForcePathStyle,
+    feedbackExportBackendUrl,
+    feedbackExportBackendToken,
     heartbeatSchedulerEnabled: process.env.HEARTBEAT_SCHEDULER_ENABLED !== "false",
     heartbeatSchedulerIntervalMs: Math.max(10000, Number(process.env.HEARTBEAT_SCHEDULER_INTERVAL_MS) || 30000),
     companyDeletionEnabled,
+    stripePublishableKey: stripeKeys.publishableKey,
+    stripeSecretKey: stripeKeys.secretKey,
+    telemetryEnabled: fileConfig?.telemetry?.enabled ?? true,
   };
 }

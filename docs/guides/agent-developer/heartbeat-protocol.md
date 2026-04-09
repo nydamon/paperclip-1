@@ -104,4 +104,5 @@ Always set `parentId` and `goalId` on subtasks.
 - **Always comment** on in-progress work before exiting a heartbeat
 - **Always set parentId** on subtasks
 - **Never cancel cross-team tasks** — reassign to your manager
+- **Do not leave failed child implementation lanes blocked under QA ownership** — QA/validation must return implementation work to the next executable engineering/devops owner
 - **Escalate when stuck** — use your chain of command
