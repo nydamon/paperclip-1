@@ -432,7 +432,7 @@ export function issueRoutes(
     comments: Array<{ body: string; authorAgentId: string | null; authorUserId: string | null; createdAt: Date | string }>,
     attachments: Array<{ contentType: string | null; createdByAgentId: string | null; createdByUserId: string | null; createdAt: Date | string }>,
   ): Promise<{ gate: string; reason: string } | null> {
-    if (req.actor === null || req.actor === void 0) return null;
+    if (!req.actor || req.actor.type !== "agent") return null;
     if (targetStatus !== "in_review") return null;
     if (!issue.projectId || !CODE_PROJECT_IDS.has(issue.projectId)) return null;
 
