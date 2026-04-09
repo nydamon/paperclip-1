@@ -3,7 +3,16 @@
 # Called by docker-entrypoint.sh before the server starts.
 set -eu
 
-SKILLS_DIR="${PAPERCLIP_SKILLS_DIR:-/app/skills}"
+RAW_SKILLS_DIR="${PAPERCLIP_SKILLS_DIR:-/app/skills}"
+SKILLS_DIR="$RAW_SKILLS_DIR"
+
+# Accept either:
+# - PAPERCLIP_SKILLS_DIR=/app/skills
+# - PAPERCLIP_SKILLS_DIR=/app
+# and avoid accidentally using /.../skills/skills.
+if [ "$(basename "$SKILLS_DIR")" != "skills" ]; then
+    SKILLS_DIR="$SKILLS_DIR/skills"
+fi
 REQUIRED_COUNT=13
 
 if [ ! -d "$SKILLS_DIR" ]; then
