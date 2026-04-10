@@ -299,6 +299,68 @@ function getWorkflowSeverity(config: Required<PluginConfig>, workflowName: strin
   return config.workflowSeverity?.[workflowName] ?? "standard";
 }
 
+function normalizeRefName(value: string | null | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function isMutedWorkflow(config: Required<PluginConfig>, workflowName: string): boolean {
+  const normalized = normalizeRefName(workflowName);
+  return (config.mutedWorkflows ?? []).some(
+    (entry) => normalizeRefName(entry) === normalized,
+  );
+}
+
+function shouldCreateStandaloneIssue(
+  config: Required<PluginConfig>,
+  input: {
+    severity: WorkflowSeverity;
+    workflowName: string;
+    branch?: string | null;
+    event?: string | null;
+  },
+): { allowed: boolean; reason?: string } {
+  if (isMutedWorkflow(config, input.workflowName)) {
+    return { allowed: false, reason: "workflow muted by config" };
+  }
+
+  if (input.severity === "informational") {
+    return { allowed: false, reason: "workflow severity is informational" };
+  }
+
+  if (input.severity === "critical") {
+    return { allowed: true };
+  }
+
+  const allowedBranches = new Set(
+    (config.standaloneIssueBranches ?? [])
+      .map((branch) => normalizeRefName(branch))
+      .filter(Boolean),
+  );
+  const allowedEvents = new Set(
+    (config.standaloneIssueEvents ?? [])
+      .map((event) => normalizeRefName(event))
+      .filter(Boolean),
+  );
+
+  const branch = normalizeRefName(input.branch);
+  if (allowedBranches.size > 0 && !allowedBranches.has(branch)) {
+    return {
+      allowed: false,
+      reason: `branch "${input.branch ?? ""}" not allowed for standalone issue creation`,
+    };
+  }
+
+  const event = normalizeRefName(input.event);
+  if (allowedEvents.size > 0 && !allowedEvents.has(event)) {
+    return {
+      allowed: false,
+      reason: `event "${input.event ?? ""}" not allowed for standalone issue creation`,
+    };
+  }
+
+  return { allowed: true };
+}
+
 /** Map severity to issue priority.  "informational" is excluded because those
  *  workflows skip issue creation entirely (early return in handleWorkflowRun). */
 function severityToPriority(severity: Exclude<WorkflowSeverity, "informational">): "critical" | "high" {
@@ -417,6 +479,10 @@ function normalizeWorkflowName(name: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+function getEscalationFamilyKey(workflowName: string, repo: string): string {
+  return `${normalizeWorkflowName(workflowName)}::${normalizeWorkflowName(repo)}`;
+}
+
 /**
  * Generate all title prefixes that could match issues for a given workflow.
  * Includes both `CI failure:` and `PR gate failure:` variants, plus the
@@ -485,11 +551,9 @@ async function autoCloseOnSuccess(
 
   // Clear failure tracker so escalation counter resets
   const tracker = await getFailureTracker();
-  const workflowKey = `${workflowName}::${repo}`;
-  const checkKey = `check::${workflowName}::${repo}`;
+  const familyKey = getEscalationFamilyKey(workflowName, repo);
   let changed = false;
-  if (tracker[workflowKey]) { delete tracker[workflowKey]; changed = true; }
-  if (tracker[checkKey]) { delete tracker[checkKey]; changed = true; }
+  if (tracker[familyKey]) { delete tracker[familyKey]; changed = true; }
   if (changed) await saveFailureTracker(tracker);
 }
 
@@ -590,6 +654,12 @@ async function handleWorkflowRun(payload: GitHubWorkflowRunEvent): Promise<void>
   if (run.conclusion !== "failure" && run.conclusion !== "timed_out") return;
 
   const severity = getWorkflowSeverity(config, run.name);
+  const standalonePolicy = shouldCreateStandaloneIssue(config, {
+    severity,
+    workflowName: run.name,
+    branch: run.head_branch,
+    event: run.event,
+  });
 
   // Informational workflows: log only, no issue creation
   if (severity === "informational") {
@@ -613,8 +683,15 @@ async function handleWorkflowRun(payload: GitHubWorkflowRunEvent): Promise<void>
     if (commented) return;
   }
 
+  if (!standalonePolicy.allowed) {
+    ctx?.logger.info(
+      `Suppressing standalone workflow issue for ${run.name} on ${repo} #${run.run_number}: ${standalonePolicy.reason ?? "policy blocked"}`,
+    );
+    return;
+  }
+
   // Track failure for root-cause escalation
-  const workflowKey = `${run.name}::${repo}`;
+  const workflowKey = getEscalationFamilyKey(run.name, repo);
   const { shouldEscalate, record } = await recordWorkflowFailure(workflowKey);
 
   const titlePrefix = `CI failure: ${run.name} on ${repo}`;
@@ -682,6 +759,12 @@ async function handleCheckRun(payload: GitHubCheckRunEvent): Promise<void> {
   if (check.conclusion !== "failure" && check.conclusion !== "timed_out") return;
 
   const severity = getWorkflowSeverity(config, check.name);
+  const standalonePolicy = shouldCreateStandaloneIssue(config, {
+    severity,
+    workflowName: check.name,
+    branch: check.check_suite?.head_branch,
+    event: "check_run",
+  });
 
   // Informational checks: log only, no issue creation
   if (severity === "informational") {
@@ -696,8 +779,15 @@ async function handleCheckRun(payload: GitHubCheckRunEvent): Promise<void> {
     if (commented) return;
   }
 
+  if (!standalonePolicy.allowed) {
+    ctx?.logger.info(
+      `Suppressing standalone check issue for ${check.name} on ${repo}: ${standalonePolicy.reason ?? "policy blocked"}`,
+    );
+    return;
+  }
+
   // Track failure for root-cause escalation
-  const workflowKey = `check::${check.name}::${repo}`;
+  const workflowKey = getEscalationFamilyKey(check.name, repo);
   const { shouldEscalate, record } = await recordWorkflowFailure(workflowKey);
 
   const titlePrefix = `PR gate failure: ${check.name} on ${repo}`;

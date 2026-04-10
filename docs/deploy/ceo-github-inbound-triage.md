@@ -112,9 +112,23 @@ Use a **single delegated task** rather than many parallel “fix CI” comments:
 
 These reduce inbound noise; they are **not** required to start triage:
 
-- Plugin: create issues in **`backlog`** with **`medium`** priority for non-default-branch failures (requires product decision + code change).
-- Plugin: cooldown or **dedupe key** `{repo, workflow, conclusion}` per 24h window.
 - Board: **label** `source:github-plugin` for filtered views.
+
+## Current defaults
+
+The GitHub plugin now defaults to a quieter routing policy:
+
+- Failures linked to an existing Paperclip issue via PR linkage are posted as comments on that issue instead of opening a new task.
+- Standalone CI issues are created only for `push` runs on `main` or `master` by default.
+- Any workflow or check marked `critical` in plugin config can still create a standalone issue outside those defaults.
+- Any workflow or check marked `informational`, or listed under `mutedWorkflows`, is suppressed from standalone issue creation.
+
+Use plugin instance config to tune these controls:
+
+- `workflowSeverity`
+- `standaloneIssueBranches`
+- `standaloneIssueEvents`
+- `mutedWorkflows`
 
 ---
 

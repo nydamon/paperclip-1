@@ -41,6 +41,9 @@ export const DEFAULT_CONFIG = {
   syncDirection: "bidirectional" as const,
   syncComments: false,
   skipSignatureVerification: false,
+  standaloneIssueBranches: ["main", "master"],
+  standaloneIssueEvents: ["push"],
+  mutedWorkflows: [] as string[],
   workflowSeverity: {} as Record<string, WorkflowSeverity>,
 };
 
@@ -54,6 +57,12 @@ export type PluginConfig = {
   syncDirection?: "bidirectional" | "github-to-paperclip" | "paperclip-to-github";
   syncComments?: boolean;
   skipSignatureVerification?: boolean;
+  /** Branch names allowed to create standalone CI issues when no linked Paperclip issue exists. */
+  standaloneIssueBranches?: string[];
+  /** GitHub events allowed to create standalone CI issues when no linked Paperclip issue exists. */
+  standaloneIssueEvents?: string[];
+  /** Case-insensitive workflow or check names to suppress from standalone issue creation. */
+  mutedWorkflows?: string[];
   /** Per-workflow severity tier.  Key = workflow name (e.g. "Deploy Vultr").
    *  - "critical": always create issue, priority urgent
    *  - "standard": (default) create issue, priority high

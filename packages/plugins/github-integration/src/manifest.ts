@@ -90,6 +90,41 @@ const manifest: PaperclipPluginManifestV1 = {
         description: "Development only — skip GitHub webhook HMAC verification.",
         default: DEFAULT_CONFIG.skipSignatureVerification,
       },
+      standaloneIssueBranches: {
+        type: "array",
+        title: "Standalone Issue Branches",
+        description:
+          "Branch names allowed to create standalone CI issues when no linked Paperclip issue exists.",
+        items: { type: "string" },
+        default: DEFAULT_CONFIG.standaloneIssueBranches,
+      },
+      standaloneIssueEvents: {
+        type: "array",
+        title: "Standalone Issue Events",
+        description:
+          "GitHub trigger events allowed to create standalone CI issues when no linked Paperclip issue exists.",
+        items: { type: "string" },
+        default: DEFAULT_CONFIG.standaloneIssueEvents,
+      },
+      mutedWorkflows: {
+        type: "array",
+        title: "Muted Workflows",
+        description:
+          "Workflow or check names to suppress from standalone issue creation. Matching is case-insensitive.",
+        items: { type: "string" },
+        default: DEFAULT_CONFIG.mutedWorkflows,
+      },
+      workflowSeverity: {
+        type: "object",
+        title: "Workflow Severity Overrides",
+        description:
+          "Map workflow or check names to critical, standard, or informational handling.",
+        additionalProperties: {
+          type: "string",
+          enum: ["critical", "standard", "informational"],
+        },
+        default: DEFAULT_CONFIG.workflowSeverity,
+      },
     },
   },
   webhooks: [
