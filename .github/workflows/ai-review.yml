@@ -128,11 +128,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          HAS_CRITICAL="$(jq '[.findings[] | select(.severity == "critical")] | length' /tmp/review-result.json)"
-          if [ "$HAS_CRITICAL" -gt 0 ]; then
-            echo "REMEDIATION_STATUS=skipped-critical" >> "$GITHUB_ENV"
-            exit 0
-          fi
 
           AFFECTED_FILES="$(jq -r '[.findings[].file // empty] | unique | .[]' /tmp/review-result.json)"
           FILE_COUNT="$(echo "$AFFECTED_FILES" | grep -c . || true)"

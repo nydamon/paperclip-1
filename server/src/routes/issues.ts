@@ -269,7 +269,7 @@ export function issueRoutes(
     targetStatus: string,
   ): Promise<{ gate: string; reason: string } | null> {
     if (req.actor.type !== "agent") return null;
-    if (!issue.projectId || !CODE_PROJECT_IDS.has(issue.projectId)) return null;
+    if (!issue.executionWorkspaceId) return null;
 
     const products = await workProducts.listForIssue(issue.id);
 
@@ -414,20 +414,10 @@ export function issueRoutes(
   }
 
   /**
-   * Code-project scope for browse evidence gates.
-   * Only issues in these projects require interactive browser evidence.
-   * Excludes Poly-weather (research/strategy), research-labeled, and strategy-labeled projects.
-   * Extend this set as more code-delivery projects are onboarded.
-   */
-  const CODE_PROJECT_IDS = new Set([
-    "a2bb9b56-e3f1-4ac9-96bc-9ad033ee9365", // Agent Reliability
-    // Add ViraCue project ID here when applicable
-  ]);
-
-  /**
-   * Engineer evidence gate: code issues moving to in_review must include
-   * browser testing evidence (browse command text + image attachment)
-   * from the transitioning actor.
+   * Engineer evidence gate: issues with execution workspaces moving to
+   * in_review must include browser testing evidence (image attachment)
+   * from the transitioning actor. Any task with visual output — websites,
+   * emails, graphics, designs — needs screenshot proof.
    */
   async function assertEngineerBrowseEvidence(
     req: Request,
@@ -438,7 +428,7 @@ export function issueRoutes(
   ): Promise<{ gate: string; reason: string } | null> {
     if (!req.actor || req.actor.type !== "agent") return null;
     if (targetStatus !== "in_review") return null;
-    if (!issue.projectId || !CODE_PROJECT_IDS.has(issue.projectId)) return null;
+    if (!issue.executionWorkspaceId) return null;
 
     const actorAgentId = req.actor.agentId ?? null;
 
@@ -506,7 +496,7 @@ export function issueRoutes(
     attachments: Array<{ contentType: string | null; createdByAgentId: string | null; createdByUserId: string | null; createdAt: Date | string }>,
   ): Promise<{ gate: string; reason: string } | null> {
     if (req.actor.type !== "agent") return null;
-    if (!issue.projectId || !CODE_PROJECT_IDS.has(issue.projectId)) return null;
+    if (!issue.executionWorkspaceId) return null;
 
     // Find the QA PASS comment author (same logic as assertQAGate: non-assignee, authenticated)
     const qaPassComment = comments.find(

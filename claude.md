@@ -369,6 +369,8 @@ Server-side gates enforce code quality workflows for agent-authored issues. All 
 
 ### Delivery gate (`assertDeliveryGate`)
 
+Scoped by `executionWorkspaceId` (same as all other code-issue gates). Issues without a workspace are exempt.
+
 | Transition | Requirement |
 |------------|-------------|
 | → `in_review` | At least one `issue_work_products` record of type `branch`, `commit`, or `pull_request` |
@@ -403,9 +405,11 @@ For UI/simulation/call features, QA must: log in, navigate to the feature, perfo
 
 Agents must include a comment when changing status or assignee. Returns 422 with gate `comment_required` if either field changes without a `comment` in the request body. Board users bypass this gate. Non-status/non-assignee updates (title, priority, etc.) do not require a comment.
 
-### Browse evidence gates (v1.1 — screenshot-primary)
+### Browse evidence gates (v1.2 — workspace-scoped, screenshot-primary)
 
-Code issues (with `executionWorkspaceId`) require interactive browser testing evidence for status transitions. Non-code issues are exempt.
+All issues with `executionWorkspaceId` require interactive browser testing evidence for status transitions. This covers every task with visual output — websites, emails, graphics, designs. Non-workspace issues are exempt.
+
+**Scoping change (v1.2):** Previously gated by a hardcoded `CODE_PROJECT_IDS` whitelist (only Agent Reliability project). Now uses `executionWorkspaceId` — the same check used by delivery, QA, and review cycle gates. Any issue with an execution workspace is gated regardless of project.
 
 | Gate | Transition | Requirements | Activity log action |
 |------|-----------|-------------|-------------------|
@@ -416,17 +420,17 @@ Code issues (with `executionWorkspaceId`) require interactive browser testing ev
 
 **No timing drift (PR #215).** The QA evidence gate previously used `issue.updatedAt` as the time anchor, but every failed gate attempt bumped `updatedAt` — eventually invalidating all prior evidence and making the issue permanently impossible to close via API. Now checks for screenshots from the QA reviewer without a time window.
 
-**Engineer evidence gate** still uses `issue.updatedAt` for the time window (less problematic since engineers typically upload evidence and transition in the same heartbeat).
-
 **Same-actor binding:** QA evidence must come from the QA PASS author. Evidence from a different agent does not satisfy the gate.
 
 **Board override:** Board users bypass all evidence gates (standard pattern).
 
-**Browse evidence pattern (v1.1):** Matches `browser-test headless/headed`, `goto https:`, `snapshot`, `gstack`, `playwright`, `VERIFIED`, `health score`, `browser verification/testing`, `console errors`, `screenshot attached/saved`, `DOM dump/snapshot`, and standard dogfood skill patterns.
+**Browse evidence pattern (v1.2):** Matches `browser-test headless/headed`, `goto https:`, `snapshot`, `gstack`, `playwright`, `VERIFIED`, `health score`, `browser verification/testing`, `console errors`, `screenshot attached/saved`, `DOM dump/snapshot`, and standard dogfood skill patterns.
 
 ### Workspace policy enablement
 
-The `enableIsolatedWorkspaces` instance flag must be `true` for delivery + evidence gates to fire on code issues. When off, `issues.ts:1099-1103` strips workspace fields from new issues, making `executionWorkspaceId = NULL` on all issues, which causes all workspace-gated checks to silently skip.
+The `enableIsolatedWorkspaces` instance flag must be `true` for delivery + evidence + QA gates to fire on code issues. When off, `issues.ts:1099-1103` strips workspace fields from new issues, making `executionWorkspaceId = NULL` on all issues, which causes all workspace-gated checks to silently skip.
+
+All code-issue gates (delivery, evidence, review cycle, QA) now use `executionWorkspaceId` as their sole scoping check — there is no separate project whitelist.
 
 Code projects must have `execution_workspace_policy` configured with `enabled: true` for new issues to get workspace IDs assigned at creation time.
 
@@ -836,7 +840,6 @@ When the AI review finds issues (`PASS_WITH_NOTES` or non-critical `FAIL`), the 
 **Remediation is skipped when:**
 - HEAD commit has `[ai-fix]` marker (already remediated)
 - Verdict is `PASS`, `ERROR`, or `HIGH_RISK`
-- Findings contain `critical` severity (requires human review)
 - More than 5 affected files
 - No file paths in findings
 
