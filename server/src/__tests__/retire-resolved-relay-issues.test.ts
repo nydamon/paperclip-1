@@ -230,4 +230,93 @@ describe("retireResolvedRelayIssues", () => {
     expect(normalIssue.status).toBe("in_progress");
     expect(activeRelay.status).toBe("in_progress");
   });
+
+  it("retires backlog relays once the target has already advanced", async () => {
+    const { relayId } = await seedRelayFixture({
+      relayTitle: "DLD-2808 QA routing: post comment + patch status",
+      relayStatus: "backlog",
+      targetIdentifier: "DLD-2808",
+      targetStatus: "in_review",
+    });
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.retireResolvedRelayIssues();
+    expect(result).toEqual({ retired: 1, done: 1, cancelled: 0 });
+
+    const [relay] = await db.select().from(issues).where(eq(issues.id, relayId));
+    expect(relay.status).toBe("done");
+  });
+
+  it("collapses duplicate relays that point at the same unresolved target", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const issuePrefix = `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`;
+    const targetId = randomUUID();
+    const relayA = randomUUID();
+    const relayB = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Test Co",
+      issuePrefix,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "TestAgent",
+      role: "engineer",
+      status: "idle",
+      adapterType: "claude_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+
+    await db.insert(issues).values({
+      id: targetId,
+      companyId,
+      title: "Target issue",
+      status: "in_progress",
+      assigneeAgentId: agentId,
+      identifier: "DLD-2985",
+      issueNumber: 1,
+    });
+
+    await db.insert(issues).values([
+      {
+        id: relayA,
+        companyId,
+        title: "DLD-2985 retrigger unblock: run A",
+        status: "backlog",
+        assigneeAgentId: agentId,
+        identifier: `${issuePrefix}-2`,
+        issueNumber: 2,
+        updatedAt: new Date("2026-04-10T10:00:00.000Z"),
+      },
+      {
+        id: relayB,
+        companyId,
+        title: "DLD-2985 retrigger unblock: run B",
+        status: "backlog",
+        assigneeAgentId: agentId,
+        identifier: `${issuePrefix}-3`,
+        issueNumber: 3,
+        updatedAt: new Date("2026-04-10T11:00:00.000Z"),
+      },
+    ]);
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.retireResolvedRelayIssues();
+    expect(result).toEqual({ retired: 1, done: 0, cancelled: 1 });
+
+    const [firstRelay] = await db.select().from(issues).where(eq(issues.id, relayA));
+    const [secondRelay] = await db.select().from(issues).where(eq(issues.id, relayB));
+    expect(firstRelay.status).toBe("cancelled");
+    expect(secondRelay.status).toBe("backlog");
+
+    const comments = await db.select().from(issueComments).where(eq(issueComments.issueId, relayA));
+    expect(comments[0]?.body).toContain("Auto-retired duplicate relay");
+  });
 });

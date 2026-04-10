@@ -73,7 +73,7 @@ const HEARTBEAT_MAX_CONCURRENT_RUNS_DEFAULT = 1;
 const HEARTBEAT_MAX_CONCURRENT_RUNS_MAX = 10;
 const DEFERRED_WAKE_CONTEXT_KEY = "_paperclipWakeContext";
 const DETACHED_PROCESS_ERROR_CODE = "process_detached";
-const ACTIVE_RELAY_STATUSES = ["todo", "in_progress", "blocked", "in_review"] as const;
+const ACTIVE_RELAY_STATUSES = ["backlog", "todo", "in_progress", "blocked", "in_review"] as const;
 const RESOLVED_RELAY_TARGET_STATUSES = new Set(["in_review", "done", "cancelled"]);
 const ISSUE_IDENTIFIER_RE = /\b[A-Z]+-\d+\b/g;
 const RELAY_TITLE_HINT_RE = /\b(relay|escalation|task_bound_scope|routing|handoff|lock|retrigger|gov-patch|patch)\b/i;
@@ -99,6 +99,23 @@ function extractRelayTargetIdentifiers(title: string, selfIdentifier: string | n
 
 function classifyRelayRetirementStatus(title: string): "done" | "cancelled" {
   return RELAY_CANCEL_HINT_RE.test(title) ? "cancelled" : "done";
+}
+
+function relayStatusRank(status: string): number {
+  switch (status) {
+    case "in_progress":
+      return 5;
+    case "in_review":
+      return 4;
+    case "todo":
+      return 3;
+    case "blocked":
+      return 2;
+    case "backlog":
+      return 1;
+    default:
+      return 0;
+  }
 }
 
 export function applyPersistedExecutionWorkspaceConfig(input: {
@@ -2193,7 +2210,9 @@ export function heartbeatService(db: Db) {
         .select()
         .from(heartbeatRuns)
         .where(and(eq(heartbeatRuns.agentId, agentId), eq(heartbeatRuns.status, "queued")))
-        .orderBy(asc(heartbeatRuns.createdAt))
+        // Fresh wakeups should supersede stale queued work so newly actionable
+        // issues are not starved behind days-old queue debris.
+        .orderBy(desc(heartbeatRuns.createdAt))
         .limit(availableSlots);
       if (queuedRuns.length === 0) return [];
 
@@ -4548,6 +4567,7 @@ export function heartbeatService(db: Db) {
           identifier: issues.identifier,
           title: issues.title,
           status: issues.status,
+          updatedAt: issues.updatedAt,
         })
         .from(issues)
         .where(inArray(issues.status, [...ACTIVE_RELAY_STATUSES]));
@@ -4663,6 +4683,111 @@ export function heartbeatService(db: Db) {
 
       if (retired > 0) {
         logger.info({ retired, done, cancelled }, "auto-retired resolved relay issues");
+      }
+
+      const unresolvedTargets = new Map<string, { id: string; identifier: string | null; status: string }>();
+      for (const target of targetIssues) {
+        if (!target.identifier) continue;
+        if (RESOLVED_RELAY_TARGET_STATUSES.has(target.status)) continue;
+        unresolvedTargets.set(`${target.companyId}:${target.identifier}`, target);
+      }
+
+      const duplicateGroups = new Map<string, Array<typeof candidates[number] & { targetIdentifier: string }>>();
+      for (const issue of candidates) {
+        if (!ACTIVE_RELAY_STATUSES.includes(issue.status as (typeof ACTIVE_RELAY_STATUSES)[number])) continue;
+        const targetIds = candidateTargets.get(issue.id);
+        if (!targetIds || targetIds.length === 0) continue;
+        for (const identifier of targetIds) {
+          const unresolvedTarget = unresolvedTargets.get(`${issue.companyId}:${identifier}`);
+          if (!unresolvedTarget) continue;
+          const key = `${issue.companyId}:${identifier}`;
+          const group = duplicateGroups.get(key) ?? [];
+          group.push({ ...issue, targetIdentifier: identifier });
+          duplicateGroups.set(key, group);
+        }
+      }
+
+      for (const group of duplicateGroups.values()) {
+        if (group.length < 2) continue;
+
+        group.sort((a, b) => {
+          const statusRankDelta = relayStatusRank(b.status) - relayStatusRank(a.status);
+          if (statusRankDelta !== 0) return statusRankDelta;
+          return b.updatedAt.getTime() - a.updatedAt.getTime();
+        });
+
+        const keeper = group[0];
+        const duplicates = group.slice(1);
+        for (const duplicate of duplicates) {
+          const target = unresolvedTargets.get(`${duplicate.companyId}:${duplicate.targetIdentifier}`);
+          if (!target) continue;
+
+          const now = new Date();
+          const commentBody = `## Auto-retired duplicate relay\n\nClosing as cancelled because multiple active relays reference ${target.identifier} while the target issue remains ${target.status}. The target issue remains the source of truth; this duplicate relay adds no unique executable work. Keeping ${keeper.identifier ?? "the most current relay"} as the single relay lane.`;
+
+          await db.transaction(async (tx) => {
+            const current = await tx
+              .select({
+                id: issues.id,
+                companyId: issues.companyId,
+                identifier: issues.identifier,
+                status: issues.status,
+              })
+              .from(issues)
+              .where(eq(issues.id, duplicate.id))
+              .then((rows) => rows[0] ?? null);
+
+            if (!current || !ACTIVE_RELAY_STATUSES.includes(current.status as (typeof ACTIVE_RELAY_STATUSES)[number])) {
+              return;
+            }
+
+            await tx
+              .update(issues)
+              .set({
+                status: "cancelled",
+                completedAt: null,
+                cancelledAt: now,
+                checkoutRunId: null,
+                executionRunId: null,
+                executionAgentNameKey: null,
+                executionLockedAt: null,
+                gateBlockCount: 0,
+                updatedAt: now,
+              })
+              .where(eq(issues.id, current.id));
+
+            await tx.insert(issueComments).values({
+              companyId: current.companyId,
+              issueId: current.id,
+              body: commentBody,
+            });
+
+            await tx.insert(activityLog).values({
+              companyId: current.companyId,
+              actorType: "system",
+              actorId: "relay-retirement-sweep",
+              action: "issue.updated",
+              entityType: "issue",
+              entityId: current.id,
+              details: {
+                status: "cancelled",
+                identifier: current.identifier,
+                source: "relay_duplicate_sweep",
+                duplicateOf: keeper.identifier,
+                retiredAgainst: target.identifier,
+                retiredAgainstStatus: target.status,
+                _previous: { status: current.status },
+              },
+            });
+          });
+
+          retired += 1;
+          cancelled += 1;
+        }
+      }
+
+      if (retired > 0) {
+        logger.info({ retired, done, cancelled }, "auto-retired relay issues");
       }
       return { retired, done, cancelled };
     },
@@ -5191,6 +5316,9 @@ export function heartbeatService(db: Db) {
           assigneeAgentId: issues.assigneeAgentId,
           status: issues.status,
           updatedAt: issues.updatedAt,
+          checkoutRunId: issues.checkoutRunId,
+          executionRunId: issues.executionRunId,
+          executionLockedAt: issues.executionLockedAt,
         })
         .from(issues)
         .where(
@@ -5203,6 +5331,7 @@ export function heartbeatService(db: Db) {
 
       let warned = 0;
       let escalated = 0;
+      let reawakened = 0;
 
       for (const issue of candidates) {
         if (!issue.assigneeAgentId) continue;
@@ -5229,6 +5358,18 @@ export function heartbeatService(db: Db) {
 
         const isEscalationDue =
           new Date(issue.updatedAt).getTime() <= escalationCutoff.getTime();
+
+        const [agent] = await db
+          .select({ status: agents.status, pauseReason: agents.pauseReason })
+          .from(agents)
+          .where(eq(agents.id, issue.assigneeAgentId))
+          .limit(1);
+
+        const canReawaken =
+          !issue.checkoutRunId &&
+          !issue.executionRunId &&
+          !issue.executionLockedAt &&
+          isDispatchableAgent(agent);
 
         if (isEscalationDue && !hasEscalated) {
           await logActivity(db, {
@@ -5259,14 +5400,34 @@ export function heartbeatService(db: Db) {
               reason: "Issue idle for 4+ hours — please update status or escalate",
             },
           });
+
+          if (canReawaken) {
+            try {
+              await enqueueWakeup(issue.assigneeAgentId, {
+                source: "automation",
+                triggerDetail: "system",
+                reason: "idle_owner_retrigger",
+                requestedByActorType: "system",
+                requestedByActorId: "idle_owner_sweeper",
+                contextSnapshot: { issueId: issue.id, source: "idle_owner_retrigger" },
+              });
+              reawakened++;
+            } catch (err) {
+              logger.error(
+                { err, issueId: issue.id, agentId: issue.assigneeAgentId },
+                "failed to enqueue wakeup for idle owner retrigger",
+              );
+            }
+          }
+
           warned++;
         }
       }
 
-      if (warned > 0 || escalated > 0) {
-        logger.info({ warned, escalated }, "idle owner SLA sweep completed");
+      if (warned > 0 || escalated > 0 || reawakened > 0) {
+        logger.info({ warned, escalated, reawakened }, "idle owner SLA sweep completed");
       }
-      return { warned, escalated };
+      return { warned, escalated, reawakened };
     },
   };
 }

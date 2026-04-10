@@ -21,6 +21,7 @@ const mockWorkProductService = vi.hoisted(() => ({
 }));
 
 const mockLogActivity = vi.hoisted(() => vi.fn(async () => undefined));
+const mockHeartbeatWakeup = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("../services/index.js", () => ({
   instanceSettingsService: () => ({ getSettings: vi.fn(async () => ({})), findByCompany: vi.fn(async () => null) }),
@@ -48,7 +49,7 @@ vi.mock("../services/index.js", () => ({
     getDefaultCompanyGoal: vi.fn(async () => null),
   }),
   heartbeatService: () => ({
-    wakeup: vi.fn(async () => undefined),
+    wakeup: mockHeartbeatWakeup,
     reportRunActivity: vi.fn(async () => undefined),
     getRun: vi.fn(async () => ({ contextSnapshot: {} })),
   }),
@@ -131,6 +132,7 @@ function createBoardApp() {
 describe("transition gate", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockHeartbeatWakeup.mockResolvedValue(undefined);
     mockIssueService.assertCheckoutOwner.mockResolvedValue({ adoptedFromRunId: null });
     mockIssueService.getCommentCursor.mockResolvedValue({
       totalComments: 0,
@@ -280,6 +282,45 @@ describe("transition gate", () => {
       .send({ status: "todo" });
 
     expect(res.status).toBe(200);
+  });
+
+  it("board reactivation wakes the existing assignee when status moves into an active lane", async () => {
+    const issue = makeIssue({ status: "blocked", assigneeAgentId: "agent-1" });
+    mockIssueService.getById.mockResolvedValue(issue);
+    mockIssueService.update.mockResolvedValue({ ...issue, status: "in_progress" });
+    mockIssueService.listComments.mockResolvedValue([]);
+
+    const res = await request(createBoardApp())
+      .patch(`/api/issues/${issue.id}`)
+      .send({ status: "in_progress" });
+
+    expect(res.status).toBe(200);
+    expect(mockHeartbeatWakeup).toHaveBeenCalledWith(
+      "agent-1",
+      expect.objectContaining({
+        source: "automation",
+        reason: "issue_status_changed",
+        payload: expect.objectContaining({
+          issueId: issue.id,
+          mutation: "update",
+          fromStatus: "blocked",
+          toStatus: "in_progress",
+        }),
+      }),
+    );
+  });
+
+  it("agent does not self-wake on same-assignee status changes", async () => {
+    const issue = makeIssue({ status: "blocked", assigneeAgentId: "agent-1" });
+    mockIssueService.getById.mockResolvedValue(issue);
+    mockIssueService.update.mockResolvedValue({ ...issue, status: "in_progress" });
+
+    const res = await request(createAgentApp())
+      .patch(`/api/issues/${issue.id}`)
+      .send({ status: "in_progress", comment: "Unblocked" });
+
+    expect(res.status).toBe(200);
+    expect(mockHeartbeatWakeup).not.toHaveBeenCalled();
   });
 
   it("activity log records transition rejection", async () => {

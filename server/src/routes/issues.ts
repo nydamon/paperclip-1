@@ -2208,10 +2208,12 @@ export function issueRoutes(
     }
 
     const assigneeChanged = assigneeWillChange;
-    const statusChangedFromBacklog =
-      existing.status === "backlog" &&
-      issue.status !== "backlog" &&
-      req.body.status !== undefined;
+    const statusChangedToExecutableAssignedState =
+      req.body.status !== undefined &&
+      existing.status !== issue.status &&
+      issue.assigneeAgentId &&
+      ["todo", "in_progress", "in_review"].includes(issue.status);
+    const executableStatusWakeAgentId = statusChangedToExecutableAssignedState ? issue.assigneeAgentId : null;
 
     // Merge all wakeups from this update into one enqueue per agent to avoid duplicate runs.
     void (async () => {
@@ -2237,14 +2239,20 @@ export function issueRoutes(
         });
       }
 
-      if (!assigneeChanged && statusChangedFromBacklog && issue.assigneeAgentId) {
-        wakeups.set(issue.assigneeAgentId, {
+      if (
+        !assigneeChanged &&
+        executableStatusWakeAgentId &&
+        !(actor.actorType === "agent" && actor.actorId === executableStatusWakeAgentId)
+      ) {
+        wakeups.set(executableStatusWakeAgentId, {
           source: "automation",
           triggerDetail: "system",
           reason: "issue_status_changed",
           payload: {
             issueId: issue.id,
             mutation: "update",
+            fromStatus: existing.status,
+            toStatus: issue.status,
             ...(interruptedRunId ? { interruptedRunId } : {}),
           },
           requestedByActorType: actor.actorType,
@@ -2252,6 +2260,8 @@ export function issueRoutes(
           contextSnapshot: {
             issueId: issue.id,
             source: "issue.status_change",
+            fromStatus: existing.status,
+            toStatus: issue.status,
             ...(interruptedRunId ? { interruptedRunId } : {}),
           },
         });
