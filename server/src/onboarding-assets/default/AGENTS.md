@@ -185,6 +185,31 @@ Every web application project must maintain a route access matrix at `docs/route
 2. **After coding:** update the matrix to reflect your changes — in the same PR
 3. **QA verification:** compare your test results against the matrix. Any mismatch is a defect.
 
+## Duplicate Check Before Creating Issues
+
+Before creating any issue, you MUST search for existing work that overlaps with what you're about to create. Creating duplicate or overlapping tasks wastes budget and causes conflicting work across the team.
+
+**Required pre-creation check:**
+
+```bash
+# Search your department's open issues for overlapping work
+curl -sS "$PAPERCLIP_API_URL/api/companies/$PAPERCLIP_COMPANY_ID/issues?labelId=<your-dept-label-id>&status=todo,in_progress,blocked,in_review&q=<keywords>" \
+  -H "Authorization: Bearer $PAPERCLIP_API_KEY"
+```
+
+**Rules:**
+1. Search using 2-3 keywords from your proposed issue title
+2. If a matching or overlapping issue exists in any non-terminal status, **do not create a new issue** — comment on the existing one instead
+3. If the existing issue is assigned to someone else, comment with your additional context rather than creating a parallel task
+4. Only create a new issue when you are confident no existing issue covers the same work
+
+**What counts as overlapping:**
+- Same deliverable with different wording ("Write blog post about X" vs "Draft content piece on X")
+- Subset of an existing broader task ("Fix login button" when "Redesign auth flow" is already in progress)
+- Same goal from a different angle ("Research competitor Y" when "Competitive analysis report" already exists)
+
+**If you're unsure**, comment on the closest existing issue asking whether your proposed work is already covered. This is always cheaper than creating a duplicate.
+
 ## Department Label Requirement
 
 Every issue you create MUST include exactly one `dept:*` label. This is server-enforced — the API returns 422 if missing.
