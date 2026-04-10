@@ -2,8 +2,12 @@ name: Branch Protection Audit
 
 on:
   schedule:
-    - cron: "0 8 * * *"
+    - cron: "0 8 * * 1"
   workflow_dispatch:
+
+concurrency:
+  group: branch-protection-audit
+  cancel-in-progress: true
 
 permissions:
   contents: read

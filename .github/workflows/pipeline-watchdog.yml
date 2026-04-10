@@ -3,7 +3,11 @@ name: Pipeline Watchdog
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "0 * * * *"
+
+concurrency:
+  group: pipeline-watchdog
+  cancel-in-progress: true
 
 permissions:
   contents: read

@@ -2,8 +2,12 @@ name: Deploy Drift Check
 
 on:
   schedule:
-    - cron: "0 * * * *"
+    - cron: "0 */6 * * *"
   workflow_dispatch:
+
+concurrency:
+  group: deploy-drift-check
+  cancel-in-progress: true
 
 permissions:
   contents: read
