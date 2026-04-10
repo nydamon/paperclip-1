@@ -27,12 +27,27 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
 
+      - name: Detect whether AI review is required
+        id: changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}")"
+          printf '%s\n' "$changed"
+          if printf '%s\n' "$changed" | grep -Eq '(^|/)(\.github/workflows/|package\.json|pnpm-workspace\.yaml|Dockerfile|scripts/|server/|ui/|cli/|packages/|tests/|tools/|agents/|skills/|deploy/|docker/|.*\.(ts|tsx|js|jsx|mjs|cjs|json|yml|yaml|sh))$'; then
+            echo "run_ai_review=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_ai_review=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up Node.js
+        if: steps.changes.outputs.run_ai_review == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 24
 
       - name: Check for [ai-fix] marker
+        if: steps.changes.outputs.run_ai_review == 'true'
         run: |
           HEAD_MSG="$(git log -1 --pretty=%s)"
           if echo "$HEAD_MSG" | grep -qF '[ai-fix]'; then
@@ -42,6 +57,7 @@ jobs:
           fi
 
       - name: Post pending status
+        if: steps.changes.outputs.run_ai_review == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -53,6 +69,7 @@ jobs:
             -f target_url="${{ github.event.pull_request.html_url }}"
 
       - name: Fetch PR metadata
+        if: steps.changes.outputs.run_ai_review == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -67,6 +84,7 @@ jobs:
           gh pr diff ${{ github.event.pull_request.number }} > /tmp/pr-diff.txt || true
 
       - name: Run AI review
+        if: steps.changes.outputs.run_ai_review == 'true'
         env:
           MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
           PR_BODY_FILE: /tmp/pr-body.txt
@@ -93,6 +111,7 @@ jobs:
 
       - name: Auto-remediate review findings
         if: |
+          steps.changes.outputs.run_ai_review == 'true' &&
           (env.VERDICT == 'PASS_WITH_NOTES' || env.VERDICT == 'FAIL') &&
           env.SKIP_REMEDIATION == 'false' &&
           env.HAS_MINIMAX_KEY == 'true'
@@ -175,7 +194,7 @@ jobs:
           echo "REMEDIATION_STATUS=applied" >> "$GITHUB_ENV"
 
       - name: Publish review status
-        if: always()
+        if: always() && steps.changes.outputs.run_ai_review == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -204,4 +223,16 @@ jobs:
             -f state="$STATE" \
             -f context="ai-review/verdict" \
             -f description="$SUMMARY" \
+            -f target_url="${{ github.event.pull_request.html_url }}"
+
+      - name: Publish skipped status for docs-only changes
+        if: steps.changes.outputs.run_ai_review != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }} \
+            -X POST \
+            -f state=success \
+            -f context="ai-review/verdict" \
+            -f description="AI review skipped for docs-only changes" \
             -f target_url="${{ github.event.pull_request.html_url }}"
