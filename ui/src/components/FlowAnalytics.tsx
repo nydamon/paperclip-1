@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   BarChart,
@@ -11,6 +11,9 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
+import { Search, Check } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { cn } from "../lib/utils";
 import { useCompany } from "../context/CompanyContext";
 import { analyticsApi } from "../api/analytics";
 import { issuesApi } from "../api/issues";
@@ -22,6 +25,89 @@ const DAY_PRESETS = [
   { label: "30d", days: 30 },
   { label: "90d", days: 90 },
 ] as const;
+
+function InitiativeFilterPicker({ initiatives, value, onChange }: {
+  initiatives: Issue[];
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const filtered = useMemo(() => {
+    if (!search.trim()) return initiatives;
+    const q = search.toLowerCase();
+    return initiatives.filter(i =>
+      i.title.toLowerCase().includes(q) ||
+      (i.identifier && i.identifier.toLowerCase().includes(q))
+    );
+  }, [initiatives, search]);
+
+  const selected = initiatives.find(i => i.id === value);
+
+  return (
+    <Popover open={open} onOpenChange={(o) => { setOpen(o); if (o) setTimeout(() => inputRef.current?.focus(), 50); }}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="flex items-center gap-1.5 text-xs border border-border rounded-md px-2 py-1.5 bg-transparent text-foreground hover:bg-accent/50 transition-colors max-w-[260px]"
+        >
+          <span className="truncate">
+            {selected ? `${selected.identifier ?? ""}: ${selected.title}` : "All initiatives"}
+          </span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-80 p-0" align="start">
+        <div className="p-2 border-b border-border">
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-accent/30">
+            <Search className="h-3 w-3 text-muted-foreground shrink-0" />
+            <input
+              ref={inputRef}
+              className="flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground/60"
+              placeholder="Search initiatives..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+        </div>
+        <div className="max-h-64 overflow-y-auto p-1">
+          <button
+            type="button"
+            className={cn(
+              "flex items-center justify-between w-full px-2 py-1.5 text-xs rounded-sm",
+              !value ? "bg-accent/50 text-foreground" : "hover:bg-accent/50 text-muted-foreground",
+            )}
+            onClick={() => { onChange(""); setOpen(false); setSearch(""); }}
+          >
+            <span>All initiatives</span>
+            {!value && <Check className="h-3 w-3 shrink-0" />}
+          </button>
+          {filtered.map((init) => (
+            <button
+              key={init.id}
+              type="button"
+              className={cn(
+                "flex items-center justify-between w-full px-2 py-1.5 text-xs rounded-sm",
+                init.id === value ? "bg-accent/50 text-foreground" : "hover:bg-accent/50 text-muted-foreground",
+              )}
+              onClick={() => { onChange(init.id); setOpen(false); setSearch(""); }}
+            >
+              <span className="truncate">
+                {init.identifier ? <span className="text-muted-foreground mr-1">{init.identifier}</span> : null}
+                {init.title}
+              </span>
+              {init.id === value && <Check className="h-3 w-3 shrink-0" />}
+            </button>
+          ))}
+          {filtered.length === 0 && (
+            <div className="px-2 py-3 text-xs text-muted-foreground text-center">No initiatives found</div>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 interface FlowAnalyticsProps {
   issues: Issue[];
@@ -45,7 +131,14 @@ export function FlowAnalytics({ issues }: FlowAnalyticsProps) {
   );
 
   const initiatives = useMemo(
-    () => issues.filter((i) => i.issueType === "initiative"),
+    () =>
+      issues
+        .filter((i) => i.issueType === "initiative")
+        .sort((a, b) => {
+          const numA = a.identifier ? parseInt(a.identifier.replace(/\D/g, ""), 10) : 0;
+          const numB = b.identifier ? parseInt(b.identifier.replace(/\D/g, ""), 10) : 0;
+          return numA - numB;
+        }),
     [issues],
   );
 
@@ -112,18 +205,11 @@ export function FlowAnalytics({ issues }: FlowAnalyticsProps) {
         )}
 
         {initiatives.length > 0 && (
-          <select
-            className="text-xs border border-border rounded-md px-2 py-1.5 bg-transparent text-foreground"
+          <InitiativeFilterPicker
+            initiatives={initiatives}
             value={initiativeId}
-            onChange={(e) => setInitiativeId(e.target.value)}
-          >
-            <option value="">All initiatives</option>
-            {initiatives.map((i) => (
-              <option key={i.id} value={i.id}>
-                {i.identifier ?? i.id.slice(0, 8)}: {i.title}
-              </option>
-            ))}
-          </select>
+            onChange={setInitiativeId}
+          />
         )}
       </div>
 
