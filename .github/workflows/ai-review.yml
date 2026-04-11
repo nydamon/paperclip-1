@@ -454,5 +454,5 @@ jobs:
             -X POST \
             -f state=success \
             -f context="ai-review/verdict" \
-            -f description="AI review skipped for docs-only changes" \
+            -f description="PASS: AI review skipped for docs-only changes" \
             -f target_url="${{ github.event.pull_request.html_url }}"

@@ -74,7 +74,8 @@ jobs:
               return;
             }
 
-            if (!description.includes('PASS')) {
+            const docsOnlyPass = description.includes('skipped for docs-only changes');
+            if (!description.includes('PASS') && !docsOnlyPass) {
               console.log(`Unexpected ai-review/verdict description: ${description}`);
               return;
             }
