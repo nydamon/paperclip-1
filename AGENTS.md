@@ -426,9 +426,13 @@ Do not start with the UI when the task data is reachable through the API or data
 
 Keep repo-wide policy in this file limited to rules that apply broadly across contributors and agents.
 
-Detailed role-specific operating procedure belongs in each agent's own instructions bundle
-(`AGENTS.md`, `HEARTBEAT.md`, `SOUL.md`, etc.), not here.
+Detailed role-specific operating procedure belongs in each agent's Paperclip-managed instruction
+bundle (`AGENTS.md`, `HEARTBEAT.md`, `SOUL.md`, etc.), not here.
 
 When a role-specific rule is important enough to move out of the shared repo policy, ensure the
-target agent's instruction bundle remains self-sufficient and includes all critical context needed
-for that agent to operate correctly after the move.
+target agent's managed instruction bundle remains self-sufficient and includes all critical
+context needed for that agent to operate correctly after the move.
+
+Paperclip-managed agent instruction bundles are the source of truth for role-specific behavior.
+Do not create parallel repo-only copies of detailed per-agent operating policy unless a task
+explicitly requires an exported snapshot for documentation or migration purposes.

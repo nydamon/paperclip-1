@@ -6,12 +6,15 @@ individual agent instruction bundles.
 Use this split:
 
 - repo-root `AGENTS.md`: broad shared policy only
-- per-agent bundles (`agents/<slug>/AGENTS.md`, managed instruction bundles, related
-  `HEARTBEAT.md` / `SOUL.md` files): role-specific operating procedures
+- Paperclip-managed per-agent instruction bundles (`AGENTS.md`, `HEARTBEAT.md`, `SOUL.md`,
+  related managed files): role-specific operating procedures
 
 When moving a role-specific rule out of shared policy, ensure the destination bundle stays
 self-sufficient and includes all critical operating context for that agent.
 
+For Paperclip projects, treat the native managed instruction bundle system as the authoritative
+home for role-specific policy. Do not create or maintain parallel repo-side per-agent policy
+files unless the task explicitly calls for an export or migration artifact.
 ## Paperclip VPS credentials
 
 - IP: `64.176.199.162`
