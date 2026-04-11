@@ -411,3 +411,24 @@ When a root cause appears in `corrections.md` 3 or more times with no durable fi
 a dedicated HIGH-priority fix ticket and route to the appropriate engineer within 24h of the
 3rd occurrence. Do not allow 10+ corrections on the same root cause without a focused fix
 ticket. Track the ticket in the issue and link it in the corrections log.
+
+### Task-reading access order
+
+When inspecting a Paperclip board task/thread for context or review, use this access order:
+
+1. Use the Paperclip API first with board-member access.
+2. If API access is unavailable, use SSH/database access next.
+3. Only use the UI after API and SSH/database access both fail.
+
+Do not start with the UI when the task data is reachable through the API or database.
+
+### Agent instruction ownership
+
+Keep repo-wide policy in this file limited to rules that apply broadly across contributors and agents.
+
+Detailed role-specific operating procedure belongs in each agent's own instructions bundle
+(`AGENTS.md`, `HEARTBEAT.md`, `SOUL.md`, etc.), not here.
+
+When a role-specific rule is important enough to move out of the shared repo policy, ensure the
+target agent's instruction bundle remains self-sufficient and includes all critical context needed
+for that agent to operate correctly after the move.

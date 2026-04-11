@@ -1,3 +1,17 @@
+## Agent instruction maintenance
+
+In Paperclip, keep the shared repo policy thin and maintain important role behavior in
+individual agent instruction bundles.
+
+Use this split:
+
+- repo-root `AGENTS.md`: broad shared policy only
+- per-agent bundles (`agents/<slug>/AGENTS.md`, managed instruction bundles, related
+  `HEARTBEAT.md` / `SOUL.md` files): role-specific operating procedures
+
+When moving a role-specific rule out of shared policy, ensure the destination bundle stays
+self-sufficient and includes all critical operating context for that agent.
+
 ## Paperclip VPS credentials
 
 - IP: `64.176.199.162`
@@ -1458,3 +1472,73 @@ Combine with other filters: `?labelId=...&status=in_progress` or `?labelId=...&q
 - `server/src/services/issues.ts` — `getDepartmentLabelIds()` service method
 - `server/src/__tests__/department-label-gate.test.ts` — 7 gate tests
 - `server/src/onboarding-assets/default/AGENTS.md` — Department Label Requirement section
+
+---
+
+## Skill system: core-only required + curated assignments (2026-04-11)
+
+### Core skill allowlist
+
+Only 4 skills are marked `required` (force-loaded for every agent). All other bundled skills are opt-in via the UI skill picker at `/DLD/agents/<name>/skills`.
+
+| Core skill | Why universal |
+|---|---|
+| `paperclip` | Control plane API access |
+| `capability-check` | Runtime permission verification |
+| `issue-attachments` | File evidence handling |
+| `para-memory-files` | Cross-session memory |
+
+**Implementation:** `CORE_SKILL_SLUGS` constant in `server/src/services/company-skills.ts` (inside `companySkillService`, line ~1462). The `listRuntimeSkillEntries()` function checks `sourceKind === "paperclip_bundled" && CORE_SKILL_SLUGS.has(skill.slug)` to set `required: true`.
+
+**What changed:** Previously ALL bundled skills (~22) were `required: true`, meaning every agent loaded composio-heygen, dogfood, create-plugin, etc. regardless of role. Now only the 4 core skills are force-loaded. Agents opt in to additional skills via `adapter_config.paperclipSkillSync.desiredSkills`.
+
+### Skill resolution chain
+
+1. `listRuntimeSkillEntries()` in `company-skills.ts` — assigns `required` flag per skill
+2. `resolvePaperclipDesiredSkillNames()` in `packages/adapter-utils/src/server-utils.ts` — unions required + agent's desiredSkills
+3. Adapter `execute()` — symlinks only resolved skills into the runtime directory
+
+### Agent skill assignment patterns
+
+| Role category | Core 4 | Additional skills |
+|---|---|---|
+| Leadership (CEO, CTO, CPO) | Always | CEO: create-agent, pricing, launch. CTO: engineering stack. CPO: product/CRO |
+| Marketing (CMO, operators) | Always | Full marketing suite: copywriting, SEO, CRO, analytics, growth |
+| Engineering (all engineers) | Always | tdd, code-reviewer, playwright-expert, senior-backend |
+| Platform/DevOps | Always | canary, pr-report, tdd, playwright-expert |
+| QA | Always | dogfood, qa-only, playwright-expert, canary |
+| Design | Always | refactoring-ui, ux-heuristics, brand-guidelines |
+| Research | Always | mcp-duckgo (web search) |
+
+### Skill sources in company_skills table
+
+| sourceKind | Count | Description |
+|---|---|---|
+| `paperclip_bundled` | ~22 | Skills from `skills/` directory, auto-imported |
+| `github` | ~57 | Community skills from GitHub repos (agricidaniel, alirezarezvani, wondelai, etc.) |
+| `skills_sh` | ~18 | Skills from skills.sh registry |
+| `local_path` | ~14 | Agent-created skills |
+| `managed_local` | 2 | Company-managed skills |
+
+### Known issue: ensureBundledSkills() duplication
+
+`ensureBundledSkills()` recreates duplicate rows on server restart. The `upsertImportedSkills()` function does check `getByKey()` first, but race conditions or multiple company refreshes cause duplicates. Current workaround: periodic cleanup SQL. Permanent fix: add `UNIQUE(company_id, key)` constraint to `company_skills` table.
+
+```sql
+-- Cleanup duplicate skills (run periodically or after restarts)
+DELETE FROM company_skills WHERE id IN (
+  SELECT id FROM (
+    SELECT id, ROW_NUMBER() OVER (PARTITION BY key ORDER BY id) as rn
+    FROM company_skills
+  ) sub WHERE rn > 1
+);
+```
+
+### Key files
+
+- `server/src/services/company-skills.ts` — `CORE_SKILL_SLUGS`, `listRuntimeSkillEntries()`, `ensureBundledSkills()`, `upsertImportedSkills()`
+- `packages/adapter-utils/src/server-utils.ts` — `resolvePaperclipDesiredSkillNames()`, `readPaperclipSkillSyncPreference()`
+- `server/src/routes/agents.ts` — `resolveDesiredSkillAssignment()`, skill sync endpoint
+- `server/src/__tests__/skill-required-filter.test.ts` — 5 core filtering tests
+- `docs/plans/2026-04-10-skill-system-cleanup-design.md` — Full design doc with agent roster
+- `docs/plans/2026-04-10-skill-system-cleanup-implementation.md` — Implementation plan with all agent skill JSON payloads
