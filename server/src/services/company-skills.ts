@@ -1459,6 +1459,13 @@ export function companySkillService(db: Db) {
   const projects = projectService(db);
   const secretsSvc = secretService(db);
 
+  const CORE_SKILL_SLUGS: ReadonlySet<string> = new Set([
+    "paperclip",
+    "capability-check",
+    "issue-attachments",
+    "para-memory-files",
+  ]);
+
   async function ensureBundledSkills(companyId: string) {
     for (const skillsRoot of resolveBundledSkillsRoot()) {
       const stats = await fs.stat(skillsRoot).catch(() => null);
@@ -2070,14 +2077,14 @@ export function companySkillService(db: Db) {
       }
       if (!source) continue;
 
-      const required = sourceKind === "paperclip_bundled";
+      const required = sourceKind === "paperclip_bundled" && CORE_SKILL_SLUGS.has(skill.slug);
       out.push({
         key: skill.key,
         runtimeName: buildSkillRuntimeName(skill.key, skill.slug),
         source,
         required,
         requiredReason: required
-          ? "Bundled Paperclip skills are always available for local adapters."
+          ? "Core Paperclip skill \u2014 always available for local adapters."
           : null,
       });
     }
