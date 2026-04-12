@@ -77,6 +77,11 @@ export function IssueRow({
               <span className="shrink-0 font-mono text-xs text-muted-foreground">
                 {identifier}
               </span>
+              {issue.issueType === "initiative" && (
+                <span className="hidden shrink-0 items-center rounded-sm bg-indigo-500/10 border border-indigo-500/30 px-1 py-0 text-[9px] font-semibold uppercase tracking-wide text-indigo-600 dark:text-indigo-400 sm:inline-flex">
+                  Init
+                </span>
+              )}
             </>
           )}
           {mobileMeta ? (
