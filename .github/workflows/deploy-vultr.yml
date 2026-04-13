@@ -1,8 +1,21 @@
 name: Deploy Vultr
 
+# Triggers:
+# - push: fires for human/admin pushes to master and for workflow-dispatched
+#   rotation workflows that push with a PAT.
+# - workflow_run: bridges auto-merged PRs. GitHub does NOT fire `push`
+#   events for merges performed by GITHUB_TOKEN, so bot-merged PRs never
+#   triggered the push path — the same constraint that forced
+#   merge-automation itself onto workflow_run in PR #289. Without this
+#   bridge every auto-merge required a manual
+#   `gh workflow run deploy-vultr.yml --ref master`.
+# - workflow_dispatch: manual fallback.
 on:
   push:
     branches: [master]
+  workflow_run:
+    workflows: ["Merge Automation"]
+    types: [completed]
   workflow_dispatch:
 
 concurrency:
@@ -15,6 +28,12 @@ permissions:
 
 jobs:
   build-and-push:
+    # For workflow_run dispatches only deploy on a successful master run.
+    # push and workflow_dispatch always proceed.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'master')
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
