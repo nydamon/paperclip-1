@@ -8,8 +8,10 @@
  *   - all external dependencies from workspace packages inlined
  *   - proper metadata for npm
  *
- * Reads from cli/package.dev.json if it exists (build already ran),
- * otherwise from cli/package.json.
+ * Always reads CLI version from cli/package.json (which setVersion has
+ * already updated with the target version before build-npm.sh runs).
+ * The dev backup (cli/package.dev.json) is NOT used as a version source
+ * because it may persist from a prior CI run with a stale version.
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -77,11 +79,12 @@ const sortedOptDeps = Object.fromEntries(
   Object.entries(allOptionalDeps).sort(([a], [b]) => a.localeCompare(b)),
 );
 
-// Read the CLI package metadata — prefer the dev backup if it exists
-const devPkgPath = resolve(repoRoot, "cli/package.dev.json");
-const cliPkg = existsSync(devPkgPath)
-  ? JSON.parse(readFileSync(devPkgPath, "utf8"))
-  : readPkg("cli");
+// Read the CLI package metadata.
+// Always read from cli/package.json — setVersion has already updated it
+// with the target version (e.g. 2026.413.0-canary.2). The dev backup
+// (cli/package.dev.json) may persist from a prior CI run with a stale
+// version (e.g. 0.3.1) and must not be used as a version source.
+const cliPkg = readPkg("cli");
 
 // Build the publishable package.json
 const publishPkg = {
