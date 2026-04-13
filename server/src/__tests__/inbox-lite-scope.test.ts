@@ -192,4 +192,26 @@ describe("inbox-lite task-bound scope", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual([]);
   });
+
+  it("global inbox includes in_review issues assigned to agent", async () => {
+    // Timer wake → global list path (no issueId in contextSnapshot)
+    mockHeartbeatGetRun.mockResolvedValue({
+      contextSnapshot: { source: "timer" },
+    });
+    const inReviewIssue = makeIssue({ id: OTHER_ISSUE_ID, identifier: "PAP-300", status: "in_review" });
+    mockIssueList.mockResolvedValue([inReviewIssue]);
+
+    const res = await request(createAgentApp())
+      .get("/api/agents/me/inbox-lite");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].status).toBe("in_review");
+
+    // Verify the list query included in_review in the status filter
+    expect(mockIssueList).toHaveBeenCalledWith(
+      "company-1",
+      expect.objectContaining({ status: expect.stringContaining("in_review") }),
+    );
+  });
 });

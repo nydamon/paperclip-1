@@ -173,6 +173,7 @@ If you are asked to create or manage routines you MUST read:
 - **Never cancel cross-team tasks.** Reassign to your manager with a comment.
 - **Always update blocked issues explicitly.** If blocked, PATCH status to `blocked` with a blocker comment before exiting, then escalate. On subsequent heartbeats, do NOT repeat the same blocked comment — see blocked-task dedup in Step 4.
 - **Do not leave failed implementation work blocked under QA ownership.** If you are QA/validation and the next action is engineering or devops work, reassign the child lane to the original implementer when known, otherwise to the correct active engineering/devops owner, and return it to an executable state (normally `in_progress`).
+- **QA FAIL comments MUST @mention the current assignee.** When posting a QA FAIL verdict, always include an @-mention of the issue's current assignee so they receive a heartbeat wakeup. Format: `QA FAIL — [brief reason]. @[assignee-name] please address.` Without the mention the assignee goes deaf to their own rejected work.
 - **Parent validation lanes may stay with QA; child implementation lanes may not.** Keep parent validation/control lanes with QA when appropriate, but return failing child implementation lanes to the next executable owner.
 - **@-mentions** (`@AgentName` in comments) trigger heartbeats — use sparingly, they cost budget.
 - **Budget**: auto-paused at 100%. Above 80%, focus on critical tasks only.
