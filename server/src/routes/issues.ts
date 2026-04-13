@@ -48,6 +48,7 @@ import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { shouldWakeAssigneeOnCheckout } from "./issues-checkout-wakeup.js";
 import { isAllowedContentType, MAX_ATTACHMENT_BYTES } from "../attachment-types.js";
 import { queueIssueAssignmentWakeup } from "../services/issue-assignment-wakeup.js";
+import { evalAllLogOnlyGates } from "../services/verification/log-only-gates.js";
 import { isDispatchableAgent } from "../utils/agent-dispatchability.js";
 import { getTaskBoundScope, assertTaskBoundAccess } from "../utils/task-bound-scope.js";
 
@@ -230,14 +231,24 @@ export function issueRoutes(
 
   // Agent status transition enforcement — agents follow a forward-only workflow.
   // Board actors bypass this entirely.
+  //
+  // `spec_draft` and `spec_approved` are added for the Phase 3 verification system:
+  // - spec_draft: QA agent has written an acceptance spec but cross-review hasn't approved it yet
+  // - spec_approved: opposite QA has approved the spec; engineer can start work
+  //
+  // These statuses are optional — code issues may skip them and go straight from todo to
+  // in_progress (existing behavior). The log-only gates in Phase 3 track how often this happens
+  // without blocking. Phase 4 flips to enforcement.
   const AGENT_ALLOWED_TRANSITIONS: Record<string, Set<string>> = {
-    backlog:     new Set(["todo", "in_progress", "cancelled"]),
-    todo:        new Set(["in_progress", "backlog", "cancelled"]),
-    in_progress: new Set(["in_review", "done", "blocked", "cancelled"]),
-    in_review:   new Set(["in_progress", "done", "cancelled"]),
-    blocked:     new Set(["in_progress", "todo", "cancelled"]),
-    done:        new Set([]),
-    cancelled:   new Set([]),
+    backlog:       new Set(["todo", "spec_draft", "in_progress", "cancelled"]),
+    todo:          new Set(["spec_draft", "in_progress", "backlog", "cancelled"]),
+    spec_draft:    new Set(["spec_approved", "todo", "cancelled"]),
+    spec_approved: new Set(["in_progress", "spec_draft", "cancelled"]),
+    in_progress:   new Set(["in_review", "done", "blocked", "cancelled"]),
+    in_review:     new Set(["in_progress", "done", "cancelled"]),
+    blocked:       new Set(["in_progress", "todo", "cancelled"]),
+    done:          new Set([]),
+    cancelled:     new Set([]),
   };
 
   function assertAgentTransition(
@@ -2366,6 +2377,50 @@ export function issueRoutes(
           await incrementGateBlockCount(existing.id);
           res.status(422).json({ error: qaBrowseResult.reason, gate: qaBrowseResult.gate });
           return;
+        }
+      }
+
+      // Phase 3 log-only verification gates. These evaluate whether the new verification system
+      // WOULD block this transition, but never actually return 422. Used for divergence analysis
+      // before Phase 4 flips to enforcement. Only fires for code issues (executionWorkspaceId set).
+      if (req.body.status) {
+        try {
+          const evalIssue = {
+            id: existing.id,
+            deliverableType: (existing as unknown as { deliverableType: string | null }).deliverableType ?? null,
+            verificationTarget: (existing as unknown as { verificationTarget: string | null }).verificationTarget ?? null,
+            verificationStatus: (existing as unknown as { verificationStatus: string | null }).verificationStatus ?? null,
+            verificationRunId: (existing as unknown as { verificationRunId: string | null }).verificationRunId ?? null,
+            executionWorkspaceId: existing.executionWorkspaceId,
+            status: existing.status,
+          };
+          const logOnlyReasons = await evalAllLogOnlyGates(db, evalIssue, req.body.status);
+          if (logOnlyReasons.length > 0) {
+            const actor = getActorInfo(req);
+            await logActivity(db, {
+              companyId: existing.companyId,
+              actorType: actor.actorType,
+              actorId: actor.actorId,
+              agentId: actor.agentId,
+              runId: actor.runId,
+              action: "issue.verification_gate_log_only",
+              entityType: "issue",
+              entityId: existing.id,
+              details: {
+                targetStatus: req.body.status,
+                fromStatus: existing.status,
+                wouldBlock: logOnlyReasons,
+                phase: 3,
+                enforced: false,
+              },
+            });
+          }
+        } catch (err) {
+          // Log-only gates MUST NOT break the happy path. If the eval throws, just warn.
+          logger.warn(
+            { err, issueId: existing.id },
+            "log-only verification gate evaluation failed; continuing",
+          );
         }
       }
     }

@@ -8,9 +8,13 @@ import {
   type VerificationRunContext,
 } from "@paperclipai/db";
 import type { StorageService } from "../../storage/types.js";
-import { runPlaywrightSpec, type RunPlaywrightResult } from "./runners/playwright-runner.js";
-import { runApiSpec, type RunApiSpecResult } from "./runners/api-runner.js";
-import { runMigrationSpec, type RunMigrationSpecResult } from "./runners/migration-runner.js";
+import { runPlaywrightSpec } from "./runners/playwright-runner.js";
+import { runApiSpec } from "./runners/api-runner.js";
+import { runMigrationSpec } from "./runners/migration-runner.js";
+import { runCliSpec } from "./runners/cli-runner.js";
+import { runConfigSpec } from "./runners/config-runner.js";
+import { runDataSpec } from "./runners/data-runner.js";
+import { runVitestSpec } from "./runners/vitest-runner.js";
 import { traceUploader, type TraceUploader } from "./trace-uploader.js";
 
 export type DeliverableType =
@@ -61,6 +65,10 @@ export interface VerificationWorkerOptions {
   runUrl?: typeof runPlaywrightSpec;
   runApi?: typeof runApiSpec;
   runMigration?: typeof runMigrationSpec;
+  runCli?: typeof runCliSpec;
+  runConfig?: typeof runConfigSpec;
+  runData?: typeof runDataSpec;
+  runVitest?: typeof runVitestSpec;
   uploader?: TraceUploader;
   sleep?: (ms: number) => Promise<void>;
 }
@@ -98,6 +106,10 @@ export function createVerificationWorker(
     runUrl = runPlaywrightSpec,
     runApi = runApiSpec,
     runMigration = runMigrationSpec,
+    runCli = runCliSpec,
+    runConfig = runConfigSpec,
+    runData = runDataSpec,
+    runVitest = runVitestSpec,
     uploader = traceUploader(db, storage),
     sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
   } = options;
@@ -198,6 +210,50 @@ export function createVerificationWorker(
 
     if (input.deliverableType === "migration") {
       const result = await runMigration({ issueId: input.issueId, specPath: input.specPath, db });
+      if (result.status === "unavailable") {
+        return { status: "unavailable", durationMs: 0, unavailableReason: result.unavailableReason };
+      }
+      if (result.status === "passed") {
+        return { status: "passed", durationMs: result.durationMs };
+      }
+      return { status: "failed", durationMs: result.durationMs, failureSummary: result.failureSummary };
+    }
+
+    if (input.deliverableType === "cli") {
+      const result = await runCli({ issueId: input.issueId, specPath: input.specPath });
+      if (result.status === "unavailable") {
+        return { status: "unavailable", durationMs: 0, unavailableReason: result.unavailableReason };
+      }
+      if (result.status === "passed") {
+        return { status: "passed", durationMs: result.durationMs };
+      }
+      return { status: "failed", durationMs: result.durationMs, failureSummary: result.failureSummary };
+    }
+
+    if (input.deliverableType === "config") {
+      const result = await runConfig({ issueId: input.issueId, specPath: input.specPath });
+      if (result.status === "unavailable") {
+        return { status: "unavailable", durationMs: 0, unavailableReason: result.unavailableReason };
+      }
+      if (result.status === "passed") {
+        return { status: "passed", durationMs: result.durationMs };
+      }
+      return { status: "failed", durationMs: result.durationMs, failureSummary: result.failureSummary };
+    }
+
+    if (input.deliverableType === "data") {
+      const result = await runData({ issueId: input.issueId, specPath: input.specPath, db });
+      if (result.status === "unavailable") {
+        return { status: "unavailable", durationMs: 0, unavailableReason: result.unavailableReason };
+      }
+      if (result.status === "passed") {
+        return { status: "passed", durationMs: result.durationMs };
+      }
+      return { status: "failed", durationMs: result.durationMs, failureSummary: result.failureSummary };
+    }
+
+    if (input.deliverableType === "lib_frontend" || input.deliverableType === "lib_backend") {
+      const result = await runVitest({ issueId: input.issueId, specPath: input.specPath });
       if (result.status === "unavailable") {
         return { status: "unavailable", durationMs: 0, unavailableReason: result.unavailableReason };
       }
