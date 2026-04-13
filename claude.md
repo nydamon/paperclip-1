@@ -395,6 +395,12 @@ High-risk PRs require extra caution and may require human review.
 |---|---|---|---|
 | `VERIFICATION_GATE_MODE` | `off` / `log_only` / `enforce` | `log_only` | How the new verification gate behaves. `log_only` emits observability entries but never blocks. `enforce` returns 422 on any failed verification. Flip to `enforce` after log-only has soaked ≥24h. |
 | `LEGACY_QA_GATES` | `on` / `off` | `on` | Whether the Phase 1-era honor-system gates (screenshot evidence, QA PASS comment) still apply. Flip to `off` once `VERIFICATION_GATE_MODE=enforce` has run cleanly for ≥5 days with zero overrides. |
+| `TERMINAL_OUTPUT_GATE_MODE` | `off` / `log_only` / `enforce` | `log_only` | Phase 6b gate that blocks `done` transitions on code issues with zero output (no work product, no attachment, no document, no substantive comment). Catches the DLD-2805 pattern ("Execution result: None" → done). Flip to `enforce` after observing `issue.terminal_output_gate_log_only` activity log entries for a few days to confirm no false positives. |
+
+**Phase 6b additions (2026-04-13):**
+- `terminal_output_gate` — blocks `done` on code issues producing zero output. Agents must use `cancelled` for wontfix situations.
+- `rollup` deliverable type — new verification runner type for consolidation/roll-up tasks. Runner asserts the roll-up task's comments reference every declared child issue's identifier AND at least one work product URL. Prevents the DLD-3047 task-hijack pattern.
+- `semantic_drift_check` — log-only heuristic that computes Jaccard similarity between an issue's title+description and its concatenated comment body at close time. Low similarity (< 0.15) emits `issue.semantic_drift_detected` in the activity log. Catches cases where a task's actual work diverges wildly from its title.
 
 **Rollout sequence for board:**
 1. Currently: both flags at default. New system is additive — no behavior change yet.

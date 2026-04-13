@@ -15,6 +15,7 @@ import { runCliSpec } from "./runners/cli-runner.js";
 import { runConfigSpec } from "./runners/config-runner.js";
 import { runDataSpec } from "./runners/data-runner.js";
 import { runVitestSpec } from "./runners/vitest-runner.js";
+import { runRollupSpec } from "./runners/rollup-runner.js";
 import { openEscalation, cancelOpenEscalationsForIssue } from "./escalation-sweeper.js";
 import { updateSpecMetadata } from "./flake-tracking.js";
 import { traceUploader, type TraceUploader } from "./trace-uploader.js";
@@ -27,7 +28,8 @@ export type DeliverableType =
   | "config"
   | "data"
   | "lib_frontend"
-  | "lib_backend";
+  | "lib_backend"
+  | "rollup";
 
 export interface RunSpecInput {
   issueId: string;
@@ -71,6 +73,7 @@ export interface VerificationWorkerOptions {
   runConfig?: typeof runConfigSpec;
   runData?: typeof runDataSpec;
   runVitest?: typeof runVitestSpec;
+  runRollup?: typeof runRollupSpec;
   uploader?: TraceUploader;
   sleep?: (ms: number) => Promise<void>;
 }
@@ -112,6 +115,7 @@ export function createVerificationWorker(
     runConfig = runConfigSpec,
     runData = runDataSpec,
     runVitest = runVitestSpec,
+    runRollup = runRollupSpec,
     uploader = traceUploader(db, storage),
     sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
   } = options;
@@ -256,6 +260,17 @@ export function createVerificationWorker(
 
     if (input.deliverableType === "lib_frontend" || input.deliverableType === "lib_backend") {
       const result = await runVitest({ issueId: input.issueId, specPath: input.specPath });
+      if (result.status === "unavailable") {
+        return { status: "unavailable", durationMs: 0, unavailableReason: result.unavailableReason };
+      }
+      if (result.status === "passed") {
+        return { status: "passed", durationMs: result.durationMs };
+      }
+      return { status: "failed", durationMs: result.durationMs, failureSummary: result.failureSummary };
+    }
+
+    if (input.deliverableType === "rollup") {
+      const result = await runRollup({ issueId: input.issueId, specPath: input.specPath, db });
       if (result.status === "unavailable") {
         return { status: "unavailable", durationMs: 0, unavailableReason: result.unavailableReason };
       }

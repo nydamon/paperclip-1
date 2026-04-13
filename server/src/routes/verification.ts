@@ -26,6 +26,7 @@ const VALID_DELIVERABLE_TYPES = new Set<DeliverableType>([
   "data",
   "lib_frontend",
   "lib_backend",
+  "rollup",
 ]);
 
 function coerceDeliverableType(value: unknown): DeliverableType {

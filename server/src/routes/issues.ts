@@ -49,6 +49,8 @@ import { shouldWakeAssigneeOnCheckout } from "./issues-checkout-wakeup.js";
 import { isAllowedContentType, MAX_ATTACHMENT_BYTES } from "../attachment-types.js";
 import { queueIssueAssignmentWakeup } from "../services/issue-assignment-wakeup.js";
 import { evalAllLogOnlyGates } from "../services/verification/log-only-gates.js";
+import { evalTerminalOutputGate } from "../services/verification/terminal-output-gate.js";
+import { checkSemanticDrift } from "../services/verification/semantic-drift.js";
 import { isDispatchableAgent } from "../utils/agent-dispatchability.js";
 import { getTaskBoundScope, assertTaskBoundAccess } from "../utils/task-bound-scope.js";
 
@@ -2460,6 +2462,123 @@ export function issueRoutes(
           logger.warn(
             { err, issueId: existing.id },
             "verification gate evaluation failed; continuing",
+          );
+        }
+      }
+
+      // Phase 6b — terminal_output_gate: block done transitions on code issues that produced
+      // zero output (no work products, attachments, documents, or substantive comments).
+      // This catches the DLD-2805 pattern ("Execution result: None — credential gate blocks"
+      // → done). The env flag mirrors the other gate flags:
+      //   - "off": skip entirely
+      //   - "log_only": emit activity log entry but don't block
+      //   - "enforce": return 422 on violation
+      const terminalOutputMode = process.env.TERMINAL_OUTPUT_GATE_MODE ?? "log_only";
+      if (
+        req.body.status === "done" &&
+        existing.status !== "done" &&
+        terminalOutputMode !== "off" &&
+        req.actor.type === "agent"
+      ) {
+        try {
+          const termResult = await evalTerminalOutputGate(db, {
+            issueId: existing.id,
+            targetStatus: "done",
+            fromStatus: existing.status,
+            executionWorkspaceId: existing.executionWorkspaceId,
+            actorType: req.actor.type,
+          });
+          if (termResult.blocked) {
+            const actor = getActorInfo(req);
+            if (terminalOutputMode === "enforce") {
+              await logActivity(db, {
+                companyId: existing.companyId,
+                actorType: actor.actorType,
+                actorId: actor.actorId,
+                agentId: actor.agentId,
+                runId: actor.runId,
+                action: "issue.terminal_output_gate_enforced",
+                entityType: "issue",
+                entityId: existing.id,
+                details: {
+                  gate: termResult.gate,
+                  reason: termResult.reason,
+                  debug: termResult.debug,
+                  targetStatus: "done",
+                },
+              });
+              await incrementGateBlockCount(existing.id);
+              res.status(422).json({ error: termResult.reason, gate: termResult.gate });
+              return;
+            }
+            // log_only mode
+            await logActivity(db, {
+              companyId: existing.companyId,
+              actorType: actor.actorType,
+              actorId: actor.actorId,
+              agentId: actor.agentId,
+              runId: actor.runId,
+              action: "issue.terminal_output_gate_log_only",
+              entityType: "issue",
+              entityId: existing.id,
+              details: {
+                wouldBlock: termResult.reason,
+                debug: termResult.debug,
+                targetStatus: "done",
+                phase: "6b",
+                enforced: false,
+              },
+            });
+          }
+        } catch (err) {
+          logger.warn(
+            { err, issueId: existing.id },
+            "terminal output gate evaluation failed; continuing",
+          );
+        }
+      }
+
+      // Phase 6b — semantic drift check (always log-only, never blocks). Runs on close to
+      // detect cases like DLD-3047 where title says "roll-up bundle" and comments are all
+      // about an unrelated security fix. Emits issue.semantic_drift_detected.
+      if (
+        (req.body.status === "done" || req.body.status === "cancelled") &&
+        existing.status !== req.body.status &&
+        req.actor.type === "agent"
+      ) {
+        try {
+          const allCommentsForDrift = await svc.listComments(existing.id, { order: "asc" });
+          const concatComments = allCommentsForDrift.map((c) => c.body).join("\n\n");
+          const drift = checkSemanticDrift({
+            title: existing.title,
+            description: existing.description,
+            commentBody: concatComments,
+          });
+          if (drift.drift) {
+            const actor = getActorInfo(req);
+            await logActivity(db, {
+              companyId: existing.companyId,
+              actorType: actor.actorType,
+              actorId: actor.actorId,
+              agentId: actor.agentId,
+              runId: actor.runId,
+              action: "issue.semantic_drift_detected",
+              entityType: "issue",
+              entityId: existing.id,
+              details: {
+                jaccard: drift.jaccard,
+                threshold: drift.threshold,
+                titleTokenCount: drift.titleTokenCount,
+                commentTokenCount: drift.commentTokenCount,
+                targetStatus: req.body.status,
+                phase: "6b",
+              },
+            });
+          }
+        } catch (err) {
+          logger.warn(
+            { err, issueId: existing.id },
+            "semantic drift check failed; continuing",
           );
         }
       }
