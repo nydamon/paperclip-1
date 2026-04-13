@@ -1,21 +1,29 @@
 name: Merge Automation
 
+# Triggered when AI Review, PR Verify, or PR Policy completes on a PR.
+#
+# Why workflow_run and not `status` / `check_run`:
+# GitHub does not fire `status` or `check_run` webhooks for events posted
+# by GITHUB_TOKEN, which breaks cross-workflow chaining. Since PR #271
+# hardened ai-review status posting via GITHUB_TOKEN, this workflow stopped
+# firing entirely (last successful run: Apr 10, 2026).
+#
+# `workflow_run` is the cross-workflow trigger that cascades from
+# GITHUB_TOKEN-invoked upstream workflows, so it is the correct primitive
+# for "run after my other checks finish".
+
 on:
-  status: {}
-  check_run:
+  workflow_run:
+    workflows: ["AI Review", "PR Verify", "PR Policy"]
     types: [completed]
 
 concurrency:
-  group: merge-automation-${{ github.event.commit.sha || github.event.check_run.head_sha }}
+  group: merge-automation-${{ github.event.workflow_run.head_sha }}
   cancel-in-progress: false
 
 jobs:
   evaluate-merge:
-    # Run on ai-review/verdict status events OR when verify/policy/review check runs complete
-    if: >-
-      (github.event_name == 'status' && github.event.context == 'ai-review/verdict') ||
-      (github.event_name == 'check_run' && github.event.check_run.conclusion == 'success' &&
-       contains(fromJSON('["verify","policy","review"]'), github.event.check_run.name))
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -23,16 +31,14 @@ jobs:
       pull-requests: write
       statuses: read
       checks: read
-
     steps:
       - name: Evaluate merge conditions
         id: evaluate
         uses: actions/github-script@v7
         with:
           script: |
-            const sha = context.eventName === 'status'
-              ? context.payload.commit.sha
-              : context.payload.check_run.head_sha;
+            const sha = context.payload.workflow_run.head_sha;
+            console.log(`Triggered by ${context.payload.workflow_run.name} for sha ${sha}`);
 
             const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
               owner: context.repo.owner,
@@ -57,7 +63,7 @@ jobs:
               statusMap[s.context] = s.state;
             }
 
-            const verdictStatus = combined.statuses.find(s => s.context === 'ai-review/verdict');
+            const verdictStatus = combined.statuses.find((s) => s.context === 'ai-review/verdict');
             if (!verdictStatus || verdictStatus.state !== 'success') {
               console.log('ai-review/verdict not yet successful.');
               return;
@@ -68,12 +74,10 @@ jobs:
               console.log('AI review requires manual merge.');
               return;
             }
-
             if (description.includes('FAIL')) {
               console.log('AI review failed.');
               return;
             }
-
             const docsOnlyPass = description.includes('skipped for docs-only changes');
             if (!description.includes('PASS') && !docsOnlyPass) {
               console.log(`Unexpected ai-review/verdict description: ${description}`);
@@ -85,10 +89,11 @@ jobs:
               repo: context.repo.repo,
               ref: sha,
             });
-
             for (const run of checkRuns.check_runs) {
               if (run.conclusion === 'success') {
                 statusMap[run.name] = 'success';
+              } else if (run.conclusion === 'skipped') {
+                statusMap[run.name] = 'skipped';
               }
             }
 
