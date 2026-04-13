@@ -99,11 +99,34 @@ describe("evalTerminalOutputGate", () => {
     expect(result.blocked).toBe(false);
   });
 
-  it("passes with a substantive comment ≥200 chars, not trivial", async () => {
-    const longBody = "This is a detailed writeup of the investigation. ".repeat(10);
+  it("passes with a substantive comment that references a URL deliverable", async () => {
+    const longBody =
+      "Detailed writeup of the investigation. See https://github.com/viraforge/paperclip/pull/123 for the fix. ".repeat(4);
     const db = makeDb({ commentBodies: [longBody] });
     const result = await evalTerminalOutputGate(db, baseInput);
     expect(result.blocked).toBe(false);
+  });
+
+  it("passes with a substantive comment that references a file path + SHA", async () => {
+    const longBody =
+      "Writeup below. The change lives at server/src/services/verification/terminal-output-gate.ts and was committed as 49eb82a8b2c1 to main. ".repeat(3);
+    const db = makeDb({ commentBodies: [longBody] });
+    const result = await evalTerminalOutputGate(db, baseInput);
+    expect(result.blocked).toBe(false);
+  });
+
+  it("BLOCKS long explanatory comments with NO deliverable reference (DLD-2805 pattern)", async () => {
+    // This is the real DLD-2805 profile: long comments explaining why work didn't happen,
+    // zero URLs, zero file paths, zero SHAs, zero PR references.
+    const dldPatternBodies = [
+      "Lane 5 wontfix credentials absent for COMPOSIO and HEYGEN. Credentials not provided by board across multiple escalation rounds spanning morning hours. Lane is out of scope without credentials. The execution result produced no artifact because credentials were never set in the agent runtime environment.",
+      "Watchdog nudge: please post current artifact or blocker in this lane within the next twenty minutes. Required: concrete output reference or blocker reason, next step, estimated completion. Without credentials no execution is possible and no output can be produced.",
+      "CEO directive received. Closing lane as wontfix per board routing. Execution result is none. No output produced because the credential gate blocks all code execution in this environment and the runtime has no way to call the external provider.",
+    ];
+    const db = makeDb({ commentBodies: dldPatternBodies });
+    const result = await evalTerminalOutputGate(db, baseInput);
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toContain("cancelled");
   });
 
   it("does NOT count trivial 'QA: PASS. done. closed.' comments as substantive", async () => {

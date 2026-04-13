@@ -62,20 +62,47 @@ const TRIVIAL_PHRASE_PATTERNS: readonly RegExp[] = [
 
 const MIN_SUBSTANTIVE_COMMENT_LENGTH = 200;
 
+/**
+ * Patterns that indicate a comment references a concrete deliverable:
+ *   - http(s) URL
+ *   - git SHA (7-40 lowercase hex — avoids matching random hex strings)
+ *   - file path (contains /, starts with word char, ends in .ext)
+ *   - GitHub PR reference (#123)
+ *
+ * A comment is only counted as "output" if it passes the length + trivial-phrase checks
+ * AND contains at least one of these deliverable references. This closes the DLD-2805
+ * loophole where long explanatory comments about WHY work didn't happen were treated
+ * as output.
+ */
+const DELIVERABLE_REFERENCE_PATTERNS: readonly RegExp[] = [
+  /https?:\/\/[^\s"'<>)\]]+/i,
+  /\b[a-f0-9]{7,40}\b/,
+  /(^|[\s(])\/[\w.-]+\/[\w./-]+\.\w{1,6}(\s|$|[)])/, // /path/to/file.ext
+  /\b[\w-]+\.(ts|tsx|js|jsx|sql|md|json|yaml|yml|sh|py|rs|go|java)\b/, // bare filename.ext
+  /\s#\d+\b/, // PR #123
+];
+
+function commentHasDeliverableReference(body: string): boolean {
+  for (const pattern of DELIVERABLE_REFERENCE_PATTERNS) {
+    if (pattern.test(body)) return true;
+  }
+  return false;
+}
+
 function isSubstantiveComment(body: string): boolean {
   const trimmed = body.trim();
   if (trimmed.length < MIN_SUBSTANTIVE_COMMENT_LENGTH) return false;
-  // Strip trivial phrases. A comment that's just "QA: PASS. done. closed." repeated has nothing
-  // left after stripping the phrases AND the punctuation/whitespace residue.
+  // Strip trivial phrases.
   let stripped = trimmed;
   for (const pattern of TRIVIAL_PHRASE_PATTERNS) {
     stripped = stripped.replace(pattern, " ");
   }
-  // Remove all non-word characters (punctuation + whitespace) and count what's left.
-  // A genuinely substantive comment will still have plenty of alphanumeric content after
-  // trivial-phrase removal. A comment that was entirely phrases will collapse to nothing.
   const alphanumericRemaining = stripped.replace(/[^a-zA-Z0-9]/g, "");
-  return alphanumericRemaining.length >= MIN_SUBSTANTIVE_COMMENT_LENGTH;
+  if (alphanumericRemaining.length < MIN_SUBSTANTIVE_COMMENT_LENGTH) return false;
+  // Key change (Phase 6b.1): a long explanatory comment is NOT output unless it references
+  // a concrete deliverable (URL, file path, SHA, PR number). DLD-2805 had 38 comments averaging
+  // 345 chars — all long, none referencing deliverables. Those should not count.
+  return commentHasDeliverableReference(body);
 }
 
 export async function evalTerminalOutputGate(
