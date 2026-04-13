@@ -14,7 +14,7 @@ All blog posts and long-form content use a consistent named author:
 **Primary author:**
 - **Name:** Damon DeCrescenzo
 - **Title:** Founder & CEO, ViraCue
-- **LinkedIn:** https://linkedin.com/in/damondecrescenzo
+- **LinkedIn:** https://www.linkedin.com/in/damondecrescenzo/
 - **Bio (short):** Damon DeCrescenzo is the founder of ViraCue, an AI-powered sales coaching platform. He built ViraCue after seeing firsthand how traditional sales training fails to develop muscle memory in reps — the same reps who need to perform under pressure on live calls.
 - **Bio (long):** Damon DeCrescenzo founded ViraCue to solve a problem he saw across every sales team he worked with: reps who could pass training but froze on real calls. ViraCue's AI simulation platform lets reps practice high-pressure scenarios — cold calls, objection handling, discovery calls — with realistic AI buyers before facing real prospects. The platform has been used by sales teams ranging from 3-person startups to enterprise SDR organizations.
 
@@ -26,7 +26,7 @@ All blog posts and long-form content use a consistent named author:
 **Author HTML template:**
 ```html
 <div class="author-byline">
-  <p>By <strong><a href="https://linkedin.com/in/damondecrescenzo">Damon DeCrescenzo</a></strong>,
+  <p>By <strong><a href="https://www.linkedin.com/in/damondecrescenzo/">Damon DeCrescenzo</a></strong>,
   Founder & CEO at ViraCue | Published [Date]</p>
 </div>
 ```
@@ -37,7 +37,7 @@ All blog posts and long-form content use a consistent named author:
   "@type": "Person",
   "name": "Damon DeCrescenzo",
   "jobTitle": "Founder & CEO",
-  "url": "https://linkedin.com/in/damondecrescenzo",
+  "url": "https://www.linkedin.com/in/damondecrescenzo/",
   "worksFor": {
     "@type": "Organization",
     "name": "ViraCue",
@@ -184,17 +184,40 @@ Every piece of content must reference at least one competitor or alternative tra
 
 ## Pre-Handoff Checklist
 
-Before moving any content to `in_review`, verify ALL of these:
+Before moving any content to `in_review`, you MUST run the deterministic SEO audit tool against the **live production URL** (not source markdown, not a preview build) and paste the output in your handoff comment.
+
+```bash
+# From the paperclip repo
+node scripts/seo-audit.mjs "https://viracue.ai/blog/your-post-slug" --markdown
+
+# Or from any workspace
+curl -sL https://raw.githubusercontent.com/Viraforge/paperclip/master/scripts/seo-audit.mjs -o /tmp/seo-audit.mjs
+node /tmp/seo-audit.mjs "https://viracue.ai/blog/your-post-slug" --markdown
+```
+
+**The tool must exit 0 (PASS, 10/10) before you hand off to QA.** If it exits 1 (FAIL), fix the blockers and re-run. Do not hand off FAILing content.
+
+### Objective checklist (enforced by the tool)
+
+- [ ] HTTP 200
+- [ ] Meta title present
+- [ ] Meta description present
+- [ ] Canonical tag is self-referential
+- [ ] Exactly one H1
+- [ ] `og:type` is `article`
+- [ ] BlogPosting or Article JSON-LD schema present
+- [ ] Named author (Damon DeCrescenzo) with LinkedIn URL in Person schema — NOT "Editorial Team"
+- [ ] Body content ≥ 300 words in pre-rendered HTML
+- [ ] No raw markdown syntax visible in rendered body
+
+### Subjective checklist (you verify manually, document in handoff)
 
 - [ ] Content brief completed and posted as issue comment
-- [ ] Named author (Damon DeCrescenzo) with LinkedIn link in byline
-- [ ] Research methodology paragraph after H1
+- [ ] Research methodology paragraph after H1 (cites specific data sources)
 - [ ] Minimum proprietary data points met (see table above)
-- [ ] Minimum customer examples met (see table above)
+- [ ] Minimum customer examples with metrics met (see table above)
 - [ ] At least 1 edge case / nuance / contrarian finding
 - [ ] At least 1 competitive positioning paragraph
-- [ ] BlogPosting JSON-LD schema with author, datePublished, wordCount
-- [ ] Internal links: 1 to pillar + 2-3 to siblings
-- [ ] `/seo page` score with zero blockers
-- [ ] `/seo content` score with zero blockers
-- [ ] AI SEO authenticity score >= 7.0 (per qa-domain-review standards)
+- [ ] Internal links: 1 to pillar + 2-3 to siblings in the same cluster
+
+**Both checklists must be complete.** The tool enforces the objective items. You enforce the subjective items in your handoff comment.

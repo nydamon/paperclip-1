@@ -49,6 +49,45 @@ Standard QA only. Skip both specialized tracks.
 
 When web-facing content is detected, run these checks in addition to functional QA.
 
+### MANDATORY: Run the deterministic SEO audit tool first
+
+Before you write anything about SEO compliance, you MUST run `scripts/seo-audit.mjs` against the live published URL and include the raw JSON output in your QA comment. This tool fetches the actual HTML served by production and checks 10 objective criteria. Do not self-report SEO findings from memory or source code inspection — the tool is the source of truth.
+
+```bash
+# From the paperclip repo (if you have it checked out)
+node scripts/seo-audit.mjs "https://viracue.ai/blog/post-slug" --markdown
+
+# From any other workspace (pulls the script from GitHub on demand)
+curl -sL https://raw.githubusercontent.com/Viraforge/paperclip/master/scripts/seo-audit.mjs -o /tmp/seo-audit.mjs
+node /tmp/seo-audit.mjs "https://viracue.ai/blog/post-slug" --markdown
+```
+
+**Exit code 0 = PASS (all 10 checks green). Exit code 1 = FAIL. Exit code 2 = tool error.**
+
+Rules:
+
+1. You MUST run the tool against the **live production URL** (viracue.ai/...), not a preview build, not localhost, not a source markdown file.
+2. You MUST include either the full markdown report or the JSON checklist in your QA comment. "I checked and it passes" without the raw output is not acceptable.
+3. If the tool exits non-zero, **QA: FAIL** is the only valid verdict. You may not argue with the tool output or claim the failures are acceptable.
+4. If a blocker is false-positive (e.g., a non-blog page type), escalate to the board — do not override the tool.
+
+The 10-point checklist the tool enforces:
+
+| # | Check | Pass condition |
+|---|-------|----------------|
+| 1 | `http_200` | URL returns HTTP 200 |
+| 2 | `meta_title_present` | `<title>` tag exists and is non-empty |
+| 3 | `meta_description_present` | `<meta name="description">` exists |
+| 4 | `canonical_self_referential` | `<link rel="canonical">` points to the same URL as the page |
+| 5 | `single_h1` | Exactly one `<h1>` element |
+| 6 | `og_type_article` | `<meta property="og:type" content="article">` |
+| 7 | `blogposting_schema_present` | A JSON-LD block with `@type: BlogPosting` or `Article` |
+| 8 | `named_author_with_linkedin` | JSON-LD Person with a real name (not "Editorial Team") and a LinkedIn URL |
+| 9 | `body_content_over_300_words` | Pre-rendered `<article>`/`<main>` body has ≥ 300 words of actual text |
+| 10 | `no_raw_markdown_in_body` | No `[text](url)` markdown link syntax visible in the rendered body |
+
+**All 10 must pass. 9/10 is FAIL, not "close enough."**
+
 ### SEO Blocking Failures (Mark QA: FAIL)
 
 Any one of these means the page **must not ship**:
@@ -125,14 +164,15 @@ When a new blog post or major content rewrite ships, run these checks to detect 
 | Research methodology paragraph | "These findings come from 3 years of customer call recordings, isolating moments where reps freeze" | ⭐⭐⭐ |
 | Transparent AI disclosure (if applicable) | "Written by [Name] with AI research assistance" | ⭐⭐⭐ |
 
-#### AI SEO Scoring for Content Authenticity
+#### AI SEO Scoring: Deterministic Only
 
-**After auditing red/green flags, score the piece:**
+**Scoring is performed by `scripts/seo-audit.mjs` — not by the LLM.**
 
-- **8.5-10/10 (Publish, no changes)**: 4+ green flags, 0 red flags. Content has clear proprietary voice and data.
-- **7.0-8.4/10 (Publish with minor improvements)**: 2-3 green flags, 0-1 medium red flags. Add author byline and 1 customer metric, ship.
-- **5.5-6.9/10 (Conditional publish with revisions)**: 1-2 green flags, 1-2 medium red flags. Require: named author, data origin story, one customer example. Blocking.
-- **< 5.5/10 (Do not publish)**: Thin content, no proprietary signal, generic AI synthesis. Send back for major rewrite.
+The tool returns a `verdict` of `PASS` (all 10 checklist items green, zero blockers) or `FAIL` (any blocker OR any missing checklist item). There is no partial-credit and no "score out of 10" based on LLM judgement. The checklist is binary.
+
+**You MAY NOT invent a score.** If you write a QA comment claiming a score without running the tool and pasting its output, your review is invalid. Board users will reopen and reassign the task.
+
+The red flags and green flags listed above (authenticity matrix) are advisory guidance for the Content SEO Operator during writing — they help explain WHY content fails the deterministic checks. QA enforces the deterministic checks.
 
 ---
 
