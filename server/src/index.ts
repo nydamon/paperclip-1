@@ -723,6 +723,30 @@ export async function startServer(): Promise<StartedServer> {
           });
       }
 
+      // --- Every 40 ticks (~20m) — chaos self-test (rate-limited internally to 1 run per 24h)
+      if (sweepTickCount % 40 === 0) {
+        void heartbeat
+          .sweepVerificationChaos(storageService)
+          .then((result) => {
+            if (result.ran) {
+              if (result.passed) {
+                logger.info({ ...result }, "verification chaos test passed");
+              } else {
+                logger.error(
+                  { ...result },
+                  "🚨 verification chaos test FAILED — system may be returning false passes",
+                );
+              }
+            }
+            if (result.staleAlert) {
+              logger.error({ ...result }, "⚠️ chaos test was stale >25h — cron is broken");
+            }
+          })
+          .catch((err) => {
+            logger.error({ err }, "verification chaos sweep failed");
+          });
+      }
+
       // --- Every 10 ticks (~5m) — lower urgency ---
       if (sweepTickCount % 10 === 0) {
         void heartbeat

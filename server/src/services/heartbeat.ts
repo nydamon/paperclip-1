@@ -5607,5 +5607,16 @@ export function heartbeatService(db: Db) {
       const mod = await import("./verification/escalation-sweeper.js");
       return mod.runEscalationSweeper(db);
     },
+
+    /**
+     * Verification chaos test sweeper. Runs a known-failing synthetic spec every 24h and asserts
+     * the verification system correctly catches it. Phase 6 of the verification system. The
+     * chaos test itself rate-limits via `verification_chaos_runs` — we can call this sweeper on
+     * every scheduler tick and it'll only actually run once per day.
+     */
+    async sweepVerificationChaos(storage: import("../storage/types.js").StorageService) {
+      const mod = await import("./verification/chaos-test.js");
+      return mod.runChaosSweeper(db, storage);
+    },
   };
 }

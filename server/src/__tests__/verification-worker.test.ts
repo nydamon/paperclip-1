@@ -33,6 +33,8 @@ function makeMockDb(companyId = "co-1") {
           inserted.push(row as typeof inserted[number]);
           return [row];
         },
+        // Flake tracking calls onConflictDoNothing() → awaits the promise
+        onConflictDoNothing: async () => [],
       }),
     }),
     update: () => ({
@@ -44,6 +46,8 @@ function makeMockDb(companyId = "co-1") {
             updated.push({ id: runId, patch });
             return [{ id: runId, ...patch }];
           },
+          // Flake tracking calls .where() without .returning() — promise-like
+          then: (resolver: (v: unknown) => unknown) => resolver(undefined),
         }),
       }),
     }),

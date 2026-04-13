@@ -16,6 +16,7 @@ import { runConfigSpec } from "./runners/config-runner.js";
 import { runDataSpec } from "./runners/data-runner.js";
 import { runVitestSpec } from "./runners/vitest-runner.js";
 import { openEscalation, cancelOpenEscalationsForIssue } from "./escalation-sweeper.js";
+import { updateSpecMetadata } from "./flake-tracking.js";
 import { traceUploader, type TraceUploader } from "./trace-uploader.js";
 
 export type DeliverableType =
@@ -353,6 +354,22 @@ export function createVerificationWorker(
               }`,
             );
           }
+          // Update flake tracking. `previousAttemptFailed` is true if we had at least one
+          // failure attempt before this passing one — that's a fail→pass transition, which
+          // is the definition of a flake.
+          try {
+            await updateSpecMetadata(db, {
+              specPath: input.specPath,
+              finalStatus: "passed",
+              previousAttemptFailed: lastFailureRunId !== null,
+            });
+          } catch (err) {
+            console.warn(
+              `[verification-worker] flake tracking update failed: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          }
           return {
             status: "passed",
             verificationRunId: finalized.id,
@@ -390,6 +407,21 @@ export function createVerificationWorker(
         } catch (err) {
           console.warn(
             `[verification-worker] failed to open escalation for ${input.issueId}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+        // Update flake tracking — persistent failure. previousAttemptFailed is false because
+        // this is the terminal fail, not a fail→pass transition.
+        try {
+          await updateSpecMetadata(db, {
+            specPath: input.specPath,
+            finalStatus: "failed",
+            previousAttemptFailed: false,
+          });
+        } catch (err) {
+          console.warn(
+            `[verification-worker] flake tracking update failed: ${
               err instanceof Error ? err.message : String(err)
             }`,
           );
