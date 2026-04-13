@@ -224,7 +224,7 @@ export async function runPlaywrightSpec(input: RunPlaywrightInput): Promise<RunP
     return {
       status: "passed",
       traceDir,
-      durationMs: stats.duration ?? durationMs,
+      durationMs: Math.floor(stats.duration ?? durationMs),
       deployedSha: shaResult.deployedSha,
     };
   }
@@ -240,7 +240,7 @@ export async function runPlaywrightSpec(input: RunPlaywrightInput): Promise<RunP
     status: "failed",
     traceDir,
     failureSummary: extractFirstFailure(report),
-    durationMs: stats.duration ?? durationMs,
+    durationMs: Math.floor(stats.duration ?? durationMs),
     deployedSha: shaResult.deployedSha,
     rawStdout: stdout.slice(0, 4000),
   };

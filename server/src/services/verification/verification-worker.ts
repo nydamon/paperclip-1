@@ -207,18 +207,21 @@ export function createVerificationWorker(
           }
         }
 
+        // Defensive: Playwright's stats.duration can be a float; duration_ms column is integer.
+        const durationMsInt = Math.floor(runResult.durationMs);
+
         if (runResult.status === "passed") {
           const finalized = await finalizeAttempt(runRow.id, {
             status: "passed",
             traceAssetId,
             deployedSha: runResult.deployedSha,
-            durationMs: runResult.durationMs,
+            durationMs: durationMsInt,
           });
           return {
             status: "passed",
             verificationRunId: finalized.id,
             traceAssetId,
-            durationMs: runResult.durationMs,
+            durationMs: durationMsInt,
             attempts: totalAttempts,
           };
         }
@@ -227,13 +230,13 @@ export function createVerificationWorker(
         lastFailureSummary = runResult.failureSummary;
         lastFailureRunId = runRow.id;
         lastFailureAssetId = traceAssetId;
-        lastFailureDurationMs = runResult.durationMs;
+        lastFailureDurationMs = durationMsInt;
         await finalizeAttempt(runRow.id, {
           status: "failed",
           failureSummary: runResult.failureSummary,
           traceAssetId,
           deployedSha: runResult.deployedSha,
-          durationMs: runResult.durationMs,
+          durationMs: durationMsInt,
         });
         if (failedAttempts < retryBudget && retryDelayMs > 0) {
           await sleep(retryDelayMs);
