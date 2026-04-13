@@ -216,13 +216,44 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     resolvedCommand,
   });
 
-  // Validate model is available before execution
-  await ensurePiModelConfiguredAndAvailable({
-    model,
-    command,
-    cwd,
-    env: runtimeEnv,
-  });
+  // Buffer stdout by lines to handle partial JSON chunks — defined at execute level
+  // so errors before runAttempt() can be logged (fixes empty-log failures when
+  // ensurePiModelConfiguredAndAvailable throws before any output is produced).
+  let stdoutBuffer = "";
+  const bufferedOnLog = async (stream: "stdout" | "stderr", chunk: string) => {
+    if (stream === "stderr") {
+      // Pass stderr through immediately (not JSONL)
+      await onLog(stream, chunk);
+      return;
+    }
+    // Buffer stdout and emit only complete lines
+    stdoutBuffer += chunk;
+    const lines = stdoutBuffer.split("\n");
+    stdoutBuffer = lines.pop() || "";
+    for (const line of lines) {
+      if (line) {
+        await onLog(stream, line + "\n");
+      }
+    }
+  };
+
+  // Validate model is available before execution — errors here produce empty logs
+  // unless we catch and log them explicitly.
+  try {
+    await ensurePiModelConfiguredAndAvailable({
+      model,
+      command,
+      cwd,
+      env: runtimeEnv,
+    });
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    await onLog(
+      "stderr",
+      `[paperclip] pi_local adapter initialization failed: ${reason}\n`,
+    );
+    throw err;
+  }
 
   const timeoutSec = asNumber(config.timeoutSec, 0);
   const graceSec = asNumber(config.graceSec, 20);
@@ -382,29 +413,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       });
     }
 
-    // Buffer stdout by lines to handle partial JSON chunks
-    let stdoutBuffer = "";
-    const bufferedOnLog = async (stream: "stdout" | "stderr", chunk: string) => {
-      if (stream === "stderr") {
-        // Pass stderr through immediately (not JSONL)
-        await onLog(stream, chunk);
-        return;
-      }
-      
-      // Buffer stdout and emit only complete lines
-      stdoutBuffer += chunk;
-      const lines = stdoutBuffer.split("\n");
-      // Keep the last (potentially incomplete) line in the buffer
-      stdoutBuffer = lines.pop() || "";
-      
-      // Emit complete lines
-      for (const line of lines) {
-        if (line) {
-          await onLog(stream, line + "\n");
-        }
-      }
-    };
-
     const proc = await runChildProcess(runId, command, args, {
       cwd,
       env: runtimeEnv,
@@ -413,10 +421,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       onSpawn,
       onLog: bufferedOnLog,
     });
-    
+
     // Flush any remaining buffer content
     if (stdoutBuffer) {
       await onLog("stdout", stdoutBuffer);
+      stdoutBuffer = "";
     }
     
     return {
