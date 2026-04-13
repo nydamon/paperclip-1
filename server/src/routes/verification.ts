@@ -51,14 +51,25 @@ function coerceString(value: unknown, field: string, required = true): string | 
   return value.trim();
 }
 
-const SPEC_PATH_PATTERN = /^skills\/acceptance-[a-z0-9-]+\/tests\/[A-Za-z0-9_.-]+\.(spec|test)\.(ts|js)$/;
+/**
+ * Spec path must live under an acceptance skill's tests/ directory. Each runner enforces a
+ * stricter per-type regex on the filename suffix (playwright: *.spec.ts/js; api: *.api.spec.json;
+ * migration: *.migration.spec.json), but at the route layer we only check the shared prefix
+ * shape and reject obvious shell-meta characters.
+ */
+const SPEC_PATH_PATTERN = /^skills\/acceptance-[a-z0-9-]+\/tests\/[A-Za-z0-9_.-]+$/;
 const TARGET_URL_PATTERN = /^https:\/\/[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?::\d+)?(?:\/[^\s]*)?$/;
 
 function validateSpecPath(value: string): string {
   if (!SPEC_PATH_PATTERN.test(value)) {
     throw badRequest(
-      `invalid specPath: must match skills/acceptance-<product>/tests/<name>.<spec|test>.<ts|js>`,
+      `invalid specPath: must match skills/acceptance-<product>/tests/<filename>`,
     );
+  }
+  // Defense in depth: reject any shell metacharacters that may have slipped past the filename
+  // regex via weird Unicode lookalikes.
+  if (/[;&|`$(){}\[\]<>\\]/.test(value)) {
+    throw badRequest(`invalid specPath: contains forbidden characters`);
   }
   return value;
 }
