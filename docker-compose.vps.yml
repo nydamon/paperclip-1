@@ -61,6 +61,11 @@ services:
       PAPERCLIP_RUBE_MCP_NAME: "${PAPERCLIP_RUBE_MCP_NAME:-}"
       PAPERCLIP_RUBE_MCP_HEADERS_JSON: "${PAPERCLIP_RUBE_MCP_HEADERS_JSON:-}"
       PAPERCLIP_EXTERNAL_MCP_SERVERS_JSON: "${PAPERCLIP_EXTERNAL_MCP_SERVERS_JSON:-}"
+      # Browser-test VPS for the verification worker (Phase 1 of the verification system).
+      # The verification worker SSHes to this host to run Playwright specs against live URLs.
+      BROWSER_TEST_HOST: "${BROWSER_TEST_HOST:-}"
+      BROWSER_TEST_USER: "${BROWSER_TEST_USER:-root}"
+      BROWSER_TEST_SSH_KEY: "${BROWSER_TEST_SSH_KEY:-}"
     # gid 999 = docker group on host, needed for hermes-bridge.sh to docker-exec into hermes-agent container.
     group_add:
       - "999"
