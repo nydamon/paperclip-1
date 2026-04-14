@@ -118,6 +118,44 @@ jobs:
           echo "VERDICT=$(jq -r '.verdict // "FAIL"' /tmp/review-result.json)" >> "$GITHUB_ENV"
           echo "SUMMARY=$(jq -r '.summary // "Review failed"' /tmp/review-result.json)" >> "$GITHUB_ENV"
 
+      - name: Apply AI-suggested version bump
+        id: version_bump
+        if: |
+          steps.changes.outputs.run_ai_review == 'true' &&
+          env.SKIP_REMEDIATION == 'false' &&
+          env.HAS_MINIMAX_KEY == 'true' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOT_PAT: ${{ secrets.BOT_PAT }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          node scripts/apply-version-bump.mjs /tmp/review-result.json > /tmp/version-bump-result.json || true
+          if [ -s /tmp/version-bump-result.json ]; then
+            cat /tmp/version-bump-result.json
+            STATUS="$(jq -r '.status // "error"' /tmp/version-bump-result.json)"
+            echo "VERSION_BUMP_STATUS=$STATUS" >> "$GITHUB_ENV"
+            if [ "$STATUS" = "applied" ]; then
+              echo "applied=true" >> "$GITHUB_OUTPUT"
+              # GITHUB_TOKEN-triggered events do NOT fire downstream workflows
+              # (GitHub anti-recursion safeguard). Use BOT_PAT if configured so
+              # close+reopen triggers a fresh pull_request:reopened event on
+              # the bumped SHA; otherwise emit a warning for manual handling.
+              if [ -n "${BOT_PAT:-}" ]; then
+                GH_TOKEN="$BOT_PAT" gh pr close "$PR_NUMBER" --repo "${{ github.repository }}" || true
+                GH_TOKEN="$BOT_PAT" gh pr reopen "$PR_NUMBER" --repo "${{ github.repository }}" || true
+              else
+                echo "::warning::BOT_PAT secret not configured — bumped commit was pushed but new workflow runs will not fire automatically. Push, comment, or close+reopen the PR manually to trigger checks, or add a BOT_PAT secret to automate this."
+              fi
+            else
+              echo "applied=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "VERSION_BUMP_STATUS=error" >> "$GITHUB_ENV"
+            echo "applied=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Determine workflow auto-remediation scope
         if: steps.changes.outputs.run_ai_review == 'true'
         env:
@@ -149,6 +187,7 @@ jobs:
         id: workflow_remediate
         if: |
           steps.changes.outputs.run_ai_review == 'true' &&
+          steps.version_bump.outputs.applied != 'true' &&
           env.SAME_REPO == 'true' &&
           env.AUTO_REMEDIATE_SCOPE == 'true' &&
           env.HAS_CRITICAL != 'true' &&
@@ -213,6 +252,7 @@ jobs:
       - name: Auto-remediate review findings
         if: |
           steps.changes.outputs.run_ai_review == 'true' &&
+          steps.version_bump.outputs.applied != 'true' &&
           steps.workflow_remediate.outputs.applied != 'true' &&
           env.AUTO_REMEDIATE_SCOPE != 'true' &&
           (env.VERDICT == 'PASS_WITH_NOTES' || env.VERDICT == 'FAIL') &&
@@ -324,24 +364,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           REMEDIATION_STATUS="${REMEDIATION_STATUS:-none}"
+          VERSION_BUMP_STATUS="${VERSION_BUMP_STATUS:-none}"
           VERDICT="${VERDICT:-FAIL}"
           SUMMARY="${SUMMARY:-Review failed}"
-          case "$REMEDIATION_STATUS" in
-            applied)
-              STATE="success"
-              SUMMARY="AI remediation applied; rerun queued"
-              ;;
-            *)
-              case "$VERDICT" in
-                PASS|PASS_WITH_NOTES|HIGH_RISK)
-                  STATE="success"
-                  ;;
-                *)
-                  STATE="failure"
-                  ;;
-              esac
-              ;;
-          esac
+          if [ "$VERSION_BUMP_STATUS" = "applied" ]; then
+            STATE="success"
+            SUMMARY="AI version bump applied; rerun queued"
+          elif [ "$REMEDIATION_STATUS" = "applied" ]; then
+            STATE="success"
+            SUMMARY="AI remediation applied; rerun queued"
+          else
+            case "$VERDICT" in
+              PASS|PASS_WITH_NOTES|HIGH_RISK)
+                STATE="success"
+                ;;
+              *)
+                STATE="failure"
+                ;;
+            esac
+          fi
 
           gh api repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }} \
             -X POST \
@@ -351,7 +392,7 @@ jobs:
             -f target_url="${{ github.event.pull_request.html_url }}"
 
       - name: Comment on PR (if findings)
-        if: steps.changes.outputs.run_ai_review == 'true' && env.REMEDIATION_STATUS != 'applied' && env.VERDICT != 'PASS'
+        if: steps.changes.outputs.run_ai_review == 'true' && env.REMEDIATION_STATUS != 'applied' && env.VERSION_BUMP_STATUS != 'applied' && env.VERDICT != 'PASS'
         uses: actions/github-script@v7
         with:
           script: |
@@ -412,6 +453,7 @@ jobs:
         if: |
           steps.changes.outputs.run_ai_review == 'true' &&
           env.REMEDIATION_STATUS != 'applied' &&
+          env.VERSION_BUMP_STATUS != 'applied' &&
           (
             env.VERDICT == 'PASS' ||
             env.VERDICT == 'PASS_WITH_NOTES' ||
