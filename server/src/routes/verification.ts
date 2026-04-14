@@ -3,7 +3,7 @@ import { eq, desc } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { issues, verificationRuns, verificationOverrides } from "@paperclipai/db";
 import type { StorageService } from "../storage/types.js";
-import { assertBoard } from "./authz.js";
+import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { createVerificationWorker, type DeliverableType } from "../services/verification/verification-worker.js";
 import { resolveEscalation, listOpenEscalations } from "../services/verification/escalation-sweeper.js";
 import { badRequest, notFound } from "../errors.js";
@@ -96,11 +96,23 @@ export function verificationRoutes(db: Db, storage: StorageService) {
 
   /**
    * POST /api/issues/:id/verify
-   * Board-only. Synchronously runs the acceptance spec and returns the result.
-   * Used in Phase 1 as a manual smoke-test endpoint before gates are wired.
+   *
+   * Synchronously runs an acceptance spec via the verification worker and returns the result.
+   * Inserts a verification_runs row that satisfies the verification_passed gate on `done`
+   * transition.
+   *
+   * Authorization (Phase 6c update): both BOARD users and AGENTS in the issue's company can
+   * call this endpoint. Originally board-only, but that made the entire verification system
+   * unusable from agent code paths — agents had no way to produce a passing run before
+   * transitioning to done. Now scoped by company access (same model as PATCH /issues/:id).
+   *
+   * Agent flow:
+   *   1. Implement the deliverable, deploy
+   *   2. POST /api/issues/:id/verify  with deliverableType + specPath + targetUrl + targetSha
+   *   3. If status==passed, PATCH /issues/:id status=done
+   *   4. The verification_passed gate sees the row and lets the transition through
    */
   router.post("/issues/:id/verify", async (req, res) => {
-    assertBoard(req);
     const issueId = req.params.id as string;
 
     const issue = await db
@@ -111,6 +123,9 @@ export function verificationRoutes(db: Db, storage: StorageService) {
       .then((rows) => rows[0]);
     if (!issue) throw notFound("issue not found");
 
+    // Scope check: board users (any company) OR agents in the issue's company can call this.
+    assertCompanyAccess(req, issue.companyId);
+
     const body = (req.body ?? {}) as VerifyRequestBody;
     const deliverableType = coerceDeliverableType(body.deliverableType);
     const specPath = validateSpecPath(coerceString(body.specPath, "specPath") as string);
@@ -120,10 +135,14 @@ export function verificationRoutes(db: Db, storage: StorageService) {
     const targetShaRaw = coerceString(body.targetSha, "targetSha", deliverableType === "url");
     const targetSha = targetShaRaw ? validateTargetSha(targetShaRaw) : undefined;
 
+    const actor = getActorInfo(req);
+
     await logActivity(db, {
       companyId: issue.companyId,
-      actorType: "user",
-      actorId: req.actor.type === "board" ? req.actor.userId ?? "board" : "board",
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      runId: actor.runId,
       action: "issue.verification_run_started",
       entityType: "issue",
       entityId: issue.id,
@@ -137,12 +156,15 @@ export function verificationRoutes(db: Db, storage: StorageService) {
       context,
       targetUrl,
       targetSha,
+      createdByAgentId: actor.agentId,
     });
 
     await logActivity(db, {
       companyId: issue.companyId,
-      actorType: "user",
-      actorId: req.actor.type === "board" ? req.actor.userId ?? "board" : "board",
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      runId: actor.runId,
       action: `issue.verification_run_${result.status}`,
       entityType: "issue",
       entityId: issue.id,
@@ -165,18 +187,19 @@ export function verificationRoutes(db: Db, storage: StorageService) {
 
   /**
    * GET /api/issues/:id/verification-runs
-   * Board-only. Lists recent verification runs for an issue.
+   * Lists recent verification runs for an issue. Scoped by company access — board users (any
+   * company) and agents in the issue's company can list. Phase 6c update from board-only.
    */
   router.get("/issues/:id/verification-runs", async (req, res) => {
-    assertBoard(req);
     const issueId = req.params.id as string;
     const issue = await db
-      .select({ id: issues.id })
+      .select({ id: issues.id, companyId: issues.companyId })
       .from(issues)
       .where(eq(issues.id, issueId))
       .limit(1)
       .then((rows) => rows[0]);
     if (!issue) throw notFound("issue not found");
+    assertCompanyAccess(req, issue.companyId);
 
     const runs = await db
       .select()
