@@ -127,22 +127,59 @@ jobs:
             });
             console.log('Requested branch update for behind PR.');
 
-      - name: Enable auto-merge
+      - name: Merge or enable auto-merge
         if: steps.evaluate.outputs.pr_number != '' && steps.evaluate.outputs.mergeable_state != 'behind' && steps.evaluate.outputs.mergeable_state != 'dirty' && steps.evaluate.outputs.mergeable_state != 'blocked' && steps.evaluate.outputs.mergeable_state != 'unknown' && steps.evaluate.outputs.has_auto_merge != 'true'
         uses: actions/github-script@v7
         with:
           script: |
             const prNodeId = '${{ steps.evaluate.outputs.node_id }}';
+            const prNumber = Number('${{ steps.evaluate.outputs.pr_number }}');
+            const mergeableState = '${{ steps.evaluate.outputs.mergeable_state }}';
             if (!prNodeId) {
               core.setFailed('Missing pull request node id.');
               return;
             }
-            await github.graphql(
-              `mutation EnableAutoMerge($pullRequestId: ID!) {
-                enablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId, mergeMethod: SQUASH }) {
-                  pullRequest { number }
-                }
-              }`,
-              { pullRequestId: prNodeId },
-            );
-            console.log(`Enabled auto-merge for PR #${{ steps.evaluate.outputs.pr_number }}`);
+
+            // If all required checks already passed (mergeable_state === 'clean'),
+            // GitHub refuses to "enable auto-merge" with UNPROCESSABLE / "Pull request
+            // is in clean status". Merge directly instead. For other non-excluded
+            // states (e.g. 'has_hooks', 'unstable' but non-required failures)
+            // auto-merge is still appropriate.
+            if (mergeableState === 'clean') {
+              await github.rest.pulls.merge({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber,
+                merge_method: 'squash',
+              });
+              console.log(`Direct-merged PR #${prNumber} (already clean).`);
+              return;
+            }
+
+            try {
+              await github.graphql(
+                `mutation EnableAutoMerge($pullRequestId: ID!) {
+                  enablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId, mergeMethod: SQUASH }) {
+                    pullRequest { number }
+                  }
+                }`,
+                { pullRequestId: prNodeId },
+              );
+              console.log(`Enabled auto-merge for PR #${prNumber}`);
+            } catch (err) {
+              // Fallback: if the GraphQL call fails with "clean status" (race
+              // between our mergeable_state read and GitHub's arm attempt),
+              // direct-merge instead of failing the workflow.
+              const msg = String(err?.message || err);
+              if (msg.includes('clean status')) {
+                await github.rest.pulls.merge({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: prNumber,
+                  merge_method: 'squash',
+                });
+                console.log(`Direct-merged PR #${prNumber} after auto-merge race.`);
+                return;
+              }
+              throw err;
+            }
