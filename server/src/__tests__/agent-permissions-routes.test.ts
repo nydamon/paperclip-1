@@ -253,6 +253,68 @@ describe("agent permission routes", () => {
     expect(res.body.access.taskAssignSource).toBe("explicit_grant");
   });
 
+  it("POST /agents/:id/grants — board grants arbitrary permission key (e.g. tickets:bypass_authoring_gates)", async () => {
+    const app = createApp({
+      type: "board",
+      userId: "board-user",
+      source: "local_implicit",
+      isInstanceAdmin: true,
+      companyIds: [companyId],
+    });
+
+    const res = await request(app)
+      .post(`/api/agents/${agentId}/grants`)
+      .send({ permissionKey: "tickets:bypass_authoring_gates", granted: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      agentId,
+      permissionKey: "tickets:bypass_authoring_gates",
+      granted: true,
+    });
+    expect(mockAccessService.setPrincipalPermission).toHaveBeenCalledWith(
+      companyId,
+      "agent",
+      agentId,
+      "tickets:bypass_authoring_gates",
+      true,
+      "board-user",
+    );
+  });
+
+  it("POST /agents/:id/grants — agents (even CEO) get 403", async () => {
+    const app = createApp({
+      type: "agent",
+      agentId: "ceo-agent-id",
+      companyId,
+      runId: "run-1",
+    });
+
+    const res = await request(app)
+      .post(`/api/agents/${agentId}/grants`)
+      .send({ permissionKey: "tickets:bypass_authoring_gates", granted: true });
+
+    expect(res.status).toBe(403);
+    expect(mockAccessService.setPrincipalPermission).not.toHaveBeenCalled();
+  });
+
+  it("POST /agents/:id/grants — rejects unknown permission keys (400)", async () => {
+    const app = createApp({
+      type: "board",
+      userId: "board-user",
+      source: "local_implicit",
+      isInstanceAdmin: true,
+      companyIds: [companyId],
+    });
+
+    const res = await request(app)
+      .post(`/api/agents/${agentId}/grants`)
+      .send({ permissionKey: "not-a-real-permission", granted: true });
+
+    expect(res.status).toBe(400);
+    expect(mockAccessService.setPrincipalPermission).not.toHaveBeenCalled();
+  });
+
   it("keeps task assignment enabled when agent creation privilege is enabled", async () => {
     mockAgentService.updatePermissions.mockResolvedValue({
       ...baseAgent,

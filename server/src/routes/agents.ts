@@ -19,6 +19,7 @@ import {
   upsertAgentInstructionsFileSchema,
   updateAgentInstructionsBundleSchema,
   updateAgentPermissionsSchema,
+  setAgentGrantSchema,
   updateAgentInstructionsPathSchema,
   wakeAgentSchema,
   updateAgentSchema,
@@ -1664,6 +1665,61 @@ export function agentRoutes(db: Db) {
     });
 
     res.json(await buildAgentDetail(agent));
+  });
+
+  // Board-only: grant/revoke an individual permission key on an agent.
+  // Kept separate from PATCH /agents/:id/permissions because that endpoint has a
+  // fixed legacy schema. This route handles arbitrary `PERMISSION_KEYS` so new
+  // capabilities (e.g. `tickets:bypass_authoring_gates`) can be granted without
+  // a schema migration.
+  router.post("/agents/:id/grants", validate(setAgentGrantSchema), async (req, res) => {
+    const id = req.params.id as string;
+    const existing = await svc.getById(id);
+    if (!existing) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    assertCompanyAccess(req, existing.companyId);
+
+    // Only board users may mutate grants. Agents — even CEO — cannot grant
+    // permissions to other agents via this route.
+    if (req.actor.type !== "board") {
+      res.status(403).json({ error: "Board-only: agents cannot manage grants" });
+      return;
+    }
+    const grantedByUserId = req.actor.userId ?? null;
+
+    await access.ensureMembership(existing.companyId, "agent", existing.id, "member", "active");
+    await access.setPrincipalPermission(
+      existing.companyId,
+      "agent",
+      existing.id,
+      req.body.permissionKey,
+      req.body.granted,
+      grantedByUserId,
+    );
+
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId: existing.companyId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      runId: actor.runId,
+      action: "agent.grant_updated",
+      entityType: "agent",
+      entityId: existing.id,
+      details: {
+        permissionKey: req.body.permissionKey,
+        granted: req.body.granted,
+      },
+    });
+
+    res.json({
+      agentId: existing.id,
+      permissionKey: req.body.permissionKey,
+      granted: req.body.granted,
+    });
   });
 
   router.patch("/agents/:id/instructions-path", validate(updateAgentInstructionsPathSchema), async (req, res) => {

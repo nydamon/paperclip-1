@@ -5,6 +5,7 @@ import {
   AGENT_ROLES,
   AGENT_STATUSES,
   INBOX_MINE_ISSUE_STATUS_FILTER,
+  PERMISSION_KEYS,
 } from "../constants.js";
 import { envConfigSchema } from "./secret.js";
 
@@ -133,3 +134,10 @@ export const updateAgentPermissionsSchema = z.object({
 });
 
 export type UpdateAgentPermissions = z.infer<typeof updateAgentPermissionsSchema>;
+
+export const setAgentGrantSchema = z.object({
+  permissionKey: z.enum(PERMISSION_KEYS),
+  granted: z.boolean(),
+});
+
+export type SetAgentGrant = z.infer<typeof setAgentGrantSchema>;
