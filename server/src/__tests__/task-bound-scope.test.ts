@@ -223,15 +223,15 @@ describe("task-bound scope enforcement", () => {
     expect(res.body.id).toBe(BOUND_ISSUE_ID);
   });
 
-  it("GET /issues/:id: non-bound issue → 403", async () => {
+  it("GET /issues/:id: non-bound issue → 200 (reads allowed across scope)", async () => {
     const other = makeOtherIssue();
     mockIssueService.getById.mockResolvedValue(other);
 
     const res = await request(createAgentApp())
       .get(`/api/issues/${OTHER_ISSUE_ID}`);
 
-    expect(res.status).toBe(403);
-    expect(res.body.gate).toBe("task_bound_scope");
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe(OTHER_ISSUE_ID);
   });
 
   // ----- POST /issues/:id/checkout -----
@@ -406,12 +406,23 @@ describe("task-bound scope enforcement", () => {
 
   // ----- GET /issues/:id/comments: read guard -----
 
-  it("GET /issues/:id/comments: non-bound → 403", async () => {
+  it("GET /issues/:id/comments: non-bound → 200 (reads allowed across scope)", async () => {
     const other = makeOtherIssue();
     mockIssueService.getById.mockResolvedValue(other);
 
     const res = await request(createAgentApp())
       .get(`/api/issues/${OTHER_ISSUE_ID}/comments`);
+
+    expect(res.status).toBe(200);
+  });
+
+  it("GET /issues/:id: fail-closed (unknown runId) still blocks even for reads", async () => {
+    mockHeartbeatGetRun.mockResolvedValue(null);
+    const other = makeOtherIssue();
+    mockIssueService.getById.mockResolvedValue(other);
+
+    const res = await request(createAgentApp())
+      .get(`/api/issues/${OTHER_ISSUE_ID}`);
 
     expect(res.status).toBe(403);
     expect(res.body.gate).toBe("task_bound_scope");

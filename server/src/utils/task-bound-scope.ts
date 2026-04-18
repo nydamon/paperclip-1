@@ -64,6 +64,16 @@ export async function getTaskBoundScope(
   return scope;
 }
 
+export interface TaskBoundAccessOptions {
+  /**
+   * When true, cross-scope access is permitted as long as the scope itself resolved
+   * successfully (i.e. we have a bound issue). Fail-closed cases (unknown run) still
+   * block. Intended for read-only routes (GET/HEAD) so managers and reviewers can
+   * inspect related issues without losing write isolation.
+   */
+  allowReadAcrossScope?: boolean;
+}
+
 /**
  * Checks whether a task-bound agent is allowed to access a given issue.
  * Returns null if access is permitted, or a gate object if blocked.
@@ -71,6 +81,7 @@ export async function getTaskBoundScope(
 export function assertTaskBoundAccess(
   scope: TaskBoundScope,
   targetIssueId: string,
+  options: TaskBoundAccessOptions = {},
 ): { gate: string; reason: string } | null {
   if (!scope.isTaskBound) return null;
 
@@ -82,6 +93,7 @@ export function assertTaskBoundAccess(
   }
 
   if (scope.boundIssueId !== targetIssueId) {
+    if (options.allowReadAcrossScope) return null;
     return {
       gate: "task_bound_scope",
       reason: `Agent is bound to task ${scope.boundIssueId} and cannot access task ${targetIssueId}.`,
