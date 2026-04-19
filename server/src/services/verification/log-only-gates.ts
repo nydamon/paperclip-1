@@ -21,17 +21,21 @@ export interface IssueForGateEval {
   verificationStatus: string | null;
   verificationRunId: string | null;
   executionWorkspaceId: string | null;
+  originKind: string | null;
   status: string;
 }
 
 /**
  * Would `deliverable_type_required` block issue creation? Returns reason if yes, else null.
  * Only fires for code issues (executionWorkspaceId set). Non-code issues are exempt.
+ * Routine execution issues are also exempt — they are system tasks spawned by the Monitor
+ * and do not require a deliverable type (DLD-3271).
  */
 export function evalDeliverableTypeRequired(
-  issue: Pick<IssueForGateEval, "deliverableType" | "executionWorkspaceId">,
+  issue: Pick<IssueForGateEval, "deliverableType" | "executionWorkspaceId" | "originKind">,
 ): string | null {
   if (!issue.executionWorkspaceId) return null; // non-code issues exempt
+  if (issue.originKind === "routine_execution") return null; // system tasks exempt
   if (!issue.deliverableType) {
     return "deliverable_type is required for code issues (would block issue creation under Phase 4)";
   }
@@ -135,6 +139,7 @@ export async function loadIssueForGateEval(
       verificationStatus: issues.verificationStatus,
       verificationRunId: issues.verificationRunId,
       executionWorkspaceId: issues.executionWorkspaceId,
+      originKind: issues.originKind,
       status: issues.status,
     })
     .from(issues)
