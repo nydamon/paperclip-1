@@ -1,0 +1,30 @@
+{
+  "name": "@paperclipai/plugin-github",
+  "private": true,
+  "version": "0.1.0",
+  "description": "GitHub integration plugin for Paperclip — CI failure ingestion and issue sync",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "paperclipPlugin": {
+    "manifest": "./dist/manifest.js",
+    "worker": "./dist/worker.js"
+  },
+  "scripts": {
+    "prebuild": "node ../../../scripts/ensure-plugin-build-deps.mjs",
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "typecheck": "pnpm --filter @paperclipai/plugin-sdk build && tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@paperclipai/plugin-sdk": "workspace:*",
+    "@paperclipai/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.6.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.0"
+  }
+}

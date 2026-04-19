@@ -1,38 +1,45 @@
 name: Release
 
+# Canary is no longer on every master push (avoids painting master red on npm auth failures).
+# Run canary: Actions → Release → workflow_dispatch → channel "canary", or rely on nightly schedule.
+# Stable: workflow_dispatch → channel "stable" (default).
+
 on:
+  schedule:
+    - cron: "0 2 * * *"
   workflow_dispatch:
     inputs:
       channel:
-        description: Release channel
-        required: true
+        description: "stable = npm latest + v* tag + GitHub Release; canary = npm canary dist-tag + canary/v* tag"
         type: choice
-        default: canary
         options:
-          - canary
           - stable
-      bump:
-        description: Semantic version bump
+          - canary
+        default: stable
         required: true
-        type: choice
-        default: patch
-        options:
-          - patch
-          - minor
-          - major
+      source_ref:
+        description: Commit SHA, branch, or tag to publish from
+        required: true
+        type: string
+        default: master
+      stable_date:
+        description: (stable only) UTC date YYYY-MM-DD for version resolution, not a semver string
+        required: false
+        type: string
       dry_run:
-        description: Preview the release without publishing
+        description: "Preview only — no npm publish, no tag push (applies to both channels)"
         required: true
         type: boolean
-        default: true
+        default: false
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  verify:
-    if: startsWith(github.ref, 'refs/heads/release/')
+  # --- Stable path (manual) -------------------------------------------------
+  verify_stable:
+    if: github.event_name == 'workflow_dispatch' && inputs.channel == 'stable'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -43,6 +50,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ inputs.source_ref }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -56,7 +64,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: Typecheck
         run: pnpm -r typecheck
@@ -67,21 +75,20 @@ jobs:
       - name: Build
         run: pnpm build
 
-  publish:
-    if: startsWith(github.ref, 'refs/heads/release/')
-    needs: verify
+  preview_stable:
+    if: github.event_name == 'workflow_dispatch' && inputs.channel == 'stable' && inputs.dry_run
+    needs: verify_stable
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    environment: npm-release
     permissions:
-      contents: write
-      id-token: write
+      contents: read
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ inputs.source_ref }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -95,34 +102,89 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Dry-run stable release
+        env:
+          GITHUB_ACTIONS: "true"
+        run: |
+          args=(stable --skip-verify --dry-run)
+          if [ -n "${{ inputs.stable_date }}" ]; then
+            args+=(--date "${{ inputs.stable_date }}")
+          fi
+          ./scripts/release.sh "${args[@]}"
+
+  publish_stable:
+    if: github.event_name == 'workflow_dispatch' && inputs.channel == 'stable' && !inputs.dry_run
+    needs: verify_stable
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: npm-stable
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.source_ref }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+          always-auth: true
+
+      - name: Check npm auth
+        run: npm whoami
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Restore tracked install-time changes
+        run: git checkout -- pnpm-lock.yaml
 
       - name: Configure git author
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Run release script
+      - name: Publish stable
         env:
           GITHUB_ACTIONS: "true"
+          NPM_PUBLISH_VERIFY_ATTEMPTS: "36"
+          NPM_PUBLISH_VERIFY_DELAY_SECONDS: "10"
         run: |
-          args=("${{ inputs.bump }}")
-          if [ "${{ inputs.channel }}" = "canary" ]; then
-            args+=("--canary")
-          fi
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            args+=("--dry-run")
+          args=(stable --skip-verify)
+          if [ -n "${{ inputs.stable_date }}" ]; then
+            args+=(--date "${{ inputs.stable_date }}")
           fi
           ./scripts/release.sh "${args[@]}"
 
-      - name: Push stable release branch commit and tag
-        if: inputs.channel == 'stable' && !inputs.dry_run
-        run: git push origin "HEAD:${GITHUB_REF_NAME}" --follow-tags
+      - name: Push stable tag
+        run: |
+          tag="$(git tag --points-at HEAD | grep '^v' | head -1)"
+          if [ -z "$tag" ]; then
+            echo "Error: no stable tag points at HEAD after release." >&2
+            exit 1
+          fi
+          git push origin "refs/tags/${tag}"
 
       - name: Create GitHub Release
-        if: inputs.channel == 'stable' && !inputs.dry_run
         env:
           GH_TOKEN: ${{ github.token }}
+          PUBLISH_REMOTE: origin
         run: |
           version="$(git tag --points-at HEAD | grep '^v' | head -1 | sed 's/^v//')"
           if [ -z "$version" ]; then
@@ -130,3 +192,101 @@ jobs:
             exit 1
           fi
           ./scripts/create-github-release.sh "$version"
+
+  # --- Canary path (manual dry-run) -----------------------------------------
+  preview_canary:
+    if: github.event_name == 'workflow_dispatch' && inputs.channel == 'canary' && inputs.dry_run
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.source_ref }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Dry-run canary release
+        env:
+          GITHUB_ACTIONS: "true"
+        run: ./scripts/release.sh canary --skip-verify --dry-run
+
+  # --- Canary path (publish) — manual or nightly schedule --------------------
+  publish_canary:
+    if: |
+      (github.event_name == 'workflow_dispatch' && inputs.channel == 'canary' && !inputs.dry_run) ||
+      github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: npm-canary
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'schedule' && 'master' || inputs.source_ref }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+          always-auth: true
+
+      - name: Check npm auth
+        run: npm whoami
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Restore tracked install-time changes
+        run: git checkout -- pnpm-lock.yaml
+
+      - name: Configure git author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Publish canary
+        env:
+          GITHUB_ACTIONS: "true"
+          NPM_PUBLISH_VERIFY_ATTEMPTS: "36"
+          NPM_PUBLISH_VERIFY_DELAY_SECONDS: "10"
+        run: ./scripts/release.sh canary --skip-verify
+
+      - name: Push canary tag
+        run: |
+          tag="$(git tag --points-at HEAD | grep '^canary/v' | head -1)"
+          if [ -z "$tag" ]; then
+            echo "No canary tag at HEAD — all packages are private, release was skipped. Nothing to push."
+            exit 0
+          fi
+          git push origin "refs/tags/${tag}"

@@ -8,7 +8,7 @@ The `claude_local` adapter runs Anthropic's Claude Code CLI locally. It supports
 ## Prerequisites
 
 - Claude Code CLI installed (`claude` command available)
-- `ANTHROPIC_API_KEY` set in the environment or agent config
+- Either `ANTHROPIC_API_KEY` (direct Anthropic), **or** OpenRouter routing (see below), **or** subscription login (`claude login`)
 
 ## Configuration Fields
 
@@ -20,7 +20,7 @@ The `claude_local` adapter runs Anthropic's Claude Code CLI locally. It supports
 | `env` | object | No | Environment variables (supports secret refs) |
 | `timeoutSec` | number | No | Process timeout (0 = no timeout) |
 | `graceSec` | number | No | Grace period before force-kill |
-| `maxTurnsPerRun` | number | No | Max agentic turns per heartbeat (defaults to `300`) |
+| `maxTurnsPerRun` | number | No | Max agentic turns per heartbeat (defaults to `1000`) |
 | `dangerouslySkipPermissions` | boolean | No | Skip permission prompts (dev only) |
 
 ## Prompt Templates
@@ -55,11 +55,28 @@ pnpm paperclipai agent local-cli claudecoder --company-id <company-id>
 
 This installs Paperclip skills in `~/.claude/skills`, creates an agent API key, and prints shell exports to run as that agent.
 
+## OpenRouter (Claude Code compatible API)
+
+To send Claude Code traffic through [OpenRouter](https://openrouter.ai/) instead of Anthropic’s API, set the adapter **`env`** (plain strings and/or `secret_ref` values — do not commit API keys to git):
+
+| Variable | Value |
+|----------|--------|
+| `OPENROUTER_API_KEY` | Your OpenRouter API key |
+| `ANTHROPIC_BASE_URL` | `https://openrouter.ai/api` |
+| `ANTHROPIC_AUTH_TOKEN` | Same value as `OPENROUTER_API_KEY` (duplicate the same secret ref if using encrypted secrets) |
+| `ANTHROPIC_API_KEY` | Empty string `""` — **required** so Claude Code does not prefer Anthropic’s key over the token |
+
+Set the model with the adapter **`model`** field (passed to `claude --model`), for example `openrouter/hunter-alpha`.
+
+Optional overrides (if your Claude Code build reads them): `ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL` — see OpenRouter’s [Claude Code integration](https://openrouter.ai/docs/guides/guides/coding-agents/claude-code-integration).
+
+If the Paperclip server container still has `ANTHROPIC_API_KEY` in its process environment, keep `ANTHROPIC_API_KEY` in the adapter `env` as `""` so it overrides the host and OpenRouter auth is used.
+
 ## Environment Test
 
 Use the "Test Environment" button in the UI to validate the adapter config. It checks:
 
 - Claude CLI is installed and accessible
 - Working directory is absolute and available (auto-created if missing and permitted)
-- API key/auth mode hints (`ANTHROPIC_API_KEY` vs subscription login)
+- API key/auth mode hints (`ANTHROPIC_API_KEY`, OpenRouter env, vs subscription login)
 - A live hello probe (`claude --print - --output-format stream-json --verbose` with prompt `Respond with hello.`) to verify CLI readiness
