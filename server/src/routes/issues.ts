@@ -454,12 +454,20 @@ export function issueRoutes(
 
   async function assertQAGate(
     req: Request,
-    issue: { id: string; executionWorkspaceId: string | null; assigneeAgentId: string | null },
+    issue: { id: string; executionWorkspaceId: string | null; assigneeAgentId: string | null; originKind?: string | null },
     targetStatus: string,
     comments: Array<{ body: string; authorAgentId: string | null; authorUserId: string | null; createdAt: Date | string }>,
   ): Promise<{ gate: string; reason: string } | null> {
     if (req.actor.type !== "agent") return null;
     if (targetStatus !== "done") return null;
+
+    // Routine execution tasks are system tasks run by the Monitor agent.
+    // They do not go through in_review and do not require QA: PASS from a
+    // separate reviewer. Skipping both gates to prevent recurrence of the
+    // "CEO timeout on pipeline stagnation monitor" pattern (DLD-3220).
+    // Root cause: Monitor posts CEO gate waiver requests for every cycle but
+    // CEO cannot respond when in error state. Fix: exclude at the gate level.
+    if (issue.originKind === "routine_execution") return null;
 
     // For code issues, verify the issue has been through in_review at some point.
     // QA: PASS posted on issues that never reached in_review indicates the review
