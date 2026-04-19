@@ -364,4 +364,51 @@ describe("transition gate", () => {
     // Delivery gate should NOT have been reached
     expect(mockWorkProductService.listForIssue).not.toHaveBeenCalled();
   });
+
+  describe("routine execution self-close (DLD-3231)", () => {
+    it("agent: routine_execution todo → done allowed", async () => {
+      const issue = makeIssue({
+        status: "todo",
+        originKind: "routine_execution",
+        originId: "routine-1",
+        originRunId: "run-1",
+        executionWorkspaceId: null,
+      });
+      mockIssueService.getById.mockResolvedValue(issue);
+      mockIssueService.update.mockResolvedValue({ ...issue, status: "done" });
+
+      const res = await request(createAgentApp())
+        .patch(`/api/issues/${issue.id}`)
+        .send({ status: "done", comment: "Routine execution complete" });
+
+      expect(res.status).toBe(200);
+      // QA gate should NOT have fired (no hasReachedStatus call)
+      expect(mockIssueService.hasReachedStatus).not.toHaveBeenCalled();
+    });
+
+    it("agent: regular todo → done still blocked", async () => {
+      const issue = makeIssue({ status: "todo" });
+      mockIssueService.getById.mockResolvedValue(issue);
+
+      const res = await request(createAgentApp())
+        .patch(`/api/issues/${issue.id}`)
+        .send({ status: "done" });
+
+      expect(res.status).toBe(422);
+      expect(res.body.gate).toBe("invalid_agent_transition");
+    });
+
+    it("agent: routine_execution todo → cancelled requires comment (transition allowed)", async () => {
+      const issue = makeIssue({ status: "todo", originKind: "routine_execution" });
+      mockIssueService.getById.mockResolvedValue(issue);
+
+      // todo → cancelled is a valid transition; it only fails because comment is missing
+      const res = await request(createAgentApp())
+        .patch(`/api/issues/${issue.id}`)
+        .send({ status: "cancelled" });
+
+      expect(res.status).toBe(422);
+      expect(res.body.gate).toBe("comment_required");
+    });
+  });
 });

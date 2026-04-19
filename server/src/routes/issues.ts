@@ -314,9 +314,19 @@ export function issueRoutes(
     req: Request,
     fromStatus: string,
     toStatus: string,
+    issue?: { originKind?: string | null },
   ): { gate: string; reason: string } | null {
     if (req.actor.type !== "agent") return null;
     if (fromStatus === toStatus) return null;
+
+    // Allow routine executions to self-close without going through in_review
+    if (
+      fromStatus === "todo" &&
+      toStatus === "done" &&
+      issue?.originKind === "routine_execution"
+    ) {
+      return null;
+    }
 
     const allowed = AGENT_ALLOWED_TRANSITIONS[fromStatus];
     if (allowed && !allowed.has(toStatus)) {
@@ -460,6 +470,8 @@ export function issueRoutes(
   ): Promise<{ gate: string; reason: string } | null> {
     if (req.actor.type !== "agent") return null;
     if (targetStatus !== "done") return null;
+    // Routine executions self-close without QA review
+    if (issue.originKind === "routine_execution") return null;
 
     // Routine execution tasks are system tasks run by the Monitor agent.
     // They do not go through in_review and do not require QA: PASS from a
@@ -2285,7 +2297,7 @@ export function issueRoutes(
     let reopenAgentRole: string | null = null;
     if (req.body.status && req.body.status !== existing.status) {
       // Transition graph: agents follow forward-only workflow
-      const transitionResult = assertAgentTransition(req, existing.status, req.body.status);
+      const transitionResult = assertAgentTransition(req, existing.status, req.body.status, existing);
       if (transitionResult) {
         // Allow privileged agents (CEO/CTO/QA) to reopen done tasks with proper payload
         if (existing.status === "done" && REOPEN_ALLOWED_TARGETS.has(req.body.status)) {
