@@ -240,9 +240,19 @@ export function issueRoutes(
     req: Request,
     fromStatus: string,
     toStatus: string,
+    issue?: { originKind?: string | null },
   ): { gate: string; reason: string } | null {
     if (req.actor.type !== "agent") return null;
     if (fromStatus === toStatus) return null;
+
+    // Allow routine executions to self-close without going through in_review
+    if (
+      fromStatus === "todo" &&
+      toStatus === "done" &&
+      issue?.originKind === "routine_execution"
+    ) {
+      return null;
+    }
 
     const allowed = AGENT_ALLOWED_TRANSITIONS[fromStatus];
     if (allowed && !allowed.has(toStatus)) {
@@ -316,12 +326,14 @@ export function issueRoutes(
 
   async function assertQAGate(
     req: Request,
-    issue: { id: string; executionWorkspaceId: string | null; assigneeAgentId: string | null },
+    issue: { id: string; executionWorkspaceId: string | null; assigneeAgentId: string | null; originKind?: string | null },
     targetStatus: string,
     comments: Array<{ body: string; authorAgentId: string | null; authorUserId: string | null; createdAt: Date | string }>,
   ): Promise<{ gate: string; reason: string } | null> {
     if (req.actor.type !== "agent") return null;
     if (targetStatus !== "done") return null;
+    // Routine executions self-close without QA review
+    if (issue.originKind === "routine_execution") return null;
 
     // For code issues, verify the issue has been through in_review at some point.
     // QA: PASS posted on issues that never reached in_review indicates the review
@@ -1814,7 +1826,7 @@ export function issueRoutes(
     // Status transition gates (agent-only — board always bypasses)
     if (req.body.status && req.body.status !== existing.status) {
       // Transition graph: agents follow forward-only workflow
-      const transitionResult = assertAgentTransition(req, existing.status, req.body.status);
+      const transitionResult = assertAgentTransition(req, existing.status, req.body.status, existing);
       if (transitionResult) {
         const actor = getActorInfo(req);
         await logActivity(db, {
