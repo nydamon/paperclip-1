@@ -113,7 +113,7 @@ export function issueRoutes(
     issue: { id: string; companyId: string },
     httpStatus?: number,
   ): Promise<boolean> {
-    const scope = await getTaskBoundScope(req, (runId) => heartbeat.getRun(runId));
+    const scope = await getTaskBoundScope(req, (runId) => heartbeat.getRun(runId), svc.getById);
     // Read-only routes may inspect any issue in the same company — writes remain
     // bound-issue only. Fail-closed (unknown run) still blocks reads.
     const allowReadAcrossScope = req.method === "GET" || req.method === "HEAD";

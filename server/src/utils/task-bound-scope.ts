@@ -16,11 +16,13 @@ const SCOPE_KEY = Symbol("taskBoundScope");
  * - Agent without runId → not task-bound
  * - Agent with runId, run not found → fail-closed: task-bound, no valid issue
  * - Agent with runId, contextSnapshot.issueId present → task-bound to that issue
+ *   UNLESS the issue has originKind="routine_execution" (Monitor system tasks)
  * - Agent with runId, no contextSnapshot.issueId (timer wake) → not task-bound
  */
 export async function resolveTaskBoundScope(
   req: Request,
   getRun: (runId: string) => Promise<{ contextSnapshot: unknown } | null>,
+  getIssue?: (issueId: string) => Promise<{ originKind?: string | null } | null | undefined>,
 ): Promise<TaskBoundScope> {
   if (req.actor.type !== "agent") {
     return { isTaskBound: false, boundIssueId: null, runId: null };
@@ -45,6 +47,17 @@ export async function resolveTaskBoundScope(
     return { isTaskBound: false, boundIssueId: null, runId };
   }
 
+  // Named agents (SPE, Research Agent, SrCxD, etc.) must remain free to work on
+  // their assigned issues even when woken up by a Monitor routine_execution issue.
+  // Monitor creates subtasks for agents — those subtasks should not lock agents out
+  // of their own work. Fixes DLD-3248: task_bound_scope pipeline deadlock.
+  if (getIssue) {
+    const issue = await getIssue(issueId);
+    if (issue?.originKind === "routine_execution") {
+      return { isTaskBound: false, boundIssueId: null, runId };
+    }
+  }
+
   return { isTaskBound: true, boundIssueId: issueId, runId };
 }
 
@@ -55,11 +68,12 @@ export async function resolveTaskBoundScope(
 export async function getTaskBoundScope(
   req: Request,
   getRun: (runId: string) => Promise<{ contextSnapshot: unknown } | null>,
+  getIssue?: (issueId: string) => Promise<{ originKind?: string | null } | null | undefined>,
 ): Promise<TaskBoundScope> {
   const cached = (req as unknown as Record<symbol, unknown>)[SCOPE_KEY] as TaskBoundScope | undefined;
   if (cached) return cached;
 
-  const scope = await resolveTaskBoundScope(req, getRun);
+  const scope = await resolveTaskBoundScope(req, getRun, getIssue);
   (req as unknown as Record<symbol, unknown>)[SCOPE_KEY] = scope;
   return scope;
 }

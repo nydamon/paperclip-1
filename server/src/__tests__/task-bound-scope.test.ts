@@ -561,4 +561,50 @@ describe("task-bound scope enforcement", () => {
     expect(res.status).toBe(422);
     expect(res.body.gate).toBe("task_bound_scope");
   });
+
+  // ----- routine_execution exclusion (DLD-3248) -----
+  // Named agents must remain free to work on their assigned issues even when woken
+  // up by a Monitor routine_execution subtask. The task_bound_scope must not
+  // propagate to named agents when the bound issue is originKind="routine_execution".
+
+  describe("routine_execution exclusion", () => {
+    it("PATCH: agent bound to routine_execution issue → allowed to patch non-bound issue", async () => {
+      // Bound issue is a Monitor routine_execution subtask
+      const routineIssue = makeIssue({ id: BOUND_ISSUE_ID, originKind: "routine_execution" });
+      // Agent's own assigned issue (the one they want to work on)
+      const ownIssue = makeOtherIssue({ id: OTHER_ISSUE_ID, status: "in_progress", originKind: "manual" });
+      mockIssueService.getById.mockResolvedValue(routineIssue);
+      mockIssueService.update.mockResolvedValue(ownIssue);
+
+      const res = await request(createAgentApp())
+        .patch(`/api/issues/${OTHER_ISSUE_ID}`)
+        .send({ comment: "Working on my assigned issue" });
+
+      expect(res.status).toBe(200);
+    });
+
+    it("POST comment: agent bound to routine_execution issue → allowed to comment on non-bound issue", async () => {
+      const routineIssue = makeIssue({ id: BOUND_ISSUE_ID, originKind: "routine_execution" });
+      mockIssueService.getById.mockResolvedValue(routineIssue);
+
+      const res = await request(createAgentApp())
+        .post(`/api/issues/${OTHER_ISSUE_ID}/comments`)
+        .send({ body: "Progress on my assigned issue" });
+
+      expect(res.status).toBe(201);
+    });
+
+    it("still blocks writes to non-bound issue when bound to non-routine issue", async () => {
+      // Bound issue is NOT a routine_execution — normal scope applies
+      const regularBound = makeIssue({ id: BOUND_ISSUE_ID, originKind: "manual" });
+      mockIssueService.getById.mockResolvedValue(regularBound);
+
+      const res = await request(createAgentApp())
+        .patch(`/api/issues/${OTHER_ISSUE_ID}`)
+        .send({ status: "done", comment: "Done" });
+
+      expect(res.status).toBe(422);
+      expect(res.body.gate).toBe("task_bound_scope");
+    });
+  });
 });
