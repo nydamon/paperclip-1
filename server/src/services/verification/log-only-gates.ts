@@ -21,6 +21,7 @@ export interface IssueForGateEval {
   verificationStatus: string | null;
   verificationRunId: string | null;
   executionWorkspaceId: string | null;
+  originKind: string | null;
   status: string;
 }
 
@@ -66,15 +67,19 @@ export function evalVerificationTargetRequired(
 /**
  * Would `verification_passed` block the transition to `done`? Checks whether the issue has a
  * verification_runs row with status='passed' or 'overridden'.
+ *
+ * Routine executions self-close without verification. Skipping to prevent recurrence
+ * of the "pipeline monitor blocked by verification gate" pattern (DLD-3323).
  */
 export async function evalVerificationPassedForDone(
   db: Db,
-  issue: Pick<IssueForGateEval, "id" | "deliverableType" | "executionWorkspaceId">,
+  issue: Pick<IssueForGateEval, "id" | "deliverableType" | "executionWorkspaceId" | "originKind">,
   targetStatus: string,
 ): Promise<string | null> {
   if (targetStatus !== "done") return null;
   if (!issue.executionWorkspaceId) return null; // non-code issues exempt
   if (!issue.deliverableType) return null; // earlier gate will catch this
+  if (issue.originKind === "routine_execution") return null; // routine executions self-close without verification
 
   // Load the latest verification run for this issue
   const latest = await db
@@ -135,6 +140,7 @@ export async function loadIssueForGateEval(
       verificationStatus: issues.verificationStatus,
       verificationRunId: issues.verificationRunId,
       executionWorkspaceId: issues.executionWorkspaceId,
+      originKind: issues.originKind,
       status: issues.status,
     })
     .from(issues)

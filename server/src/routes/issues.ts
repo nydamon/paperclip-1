@@ -2497,6 +2497,7 @@ export function issueRoutes(
             verificationStatus: (existing as unknown as { verificationStatus: string | null }).verificationStatus ?? null,
             verificationRunId: (existing as unknown as { verificationRunId: string | null }).verificationRunId ?? null,
             executionWorkspaceId: existing.executionWorkspaceId,
+            originKind: (existing as unknown as { originKind: string | null }).originKind ?? null,
             status: existing.status,
           };
           const reasons = await evalAllLogOnlyGates(db, evalIssue, req.body.status);
