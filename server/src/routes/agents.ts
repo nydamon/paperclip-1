@@ -1104,7 +1104,7 @@ export function agentRoutes(db: Db) {
       return;
     }
 
-    const scope = await getTaskBoundScope(req, (runId) => heartbeat.getRun(runId));
+    const scope = await getTaskBoundScope(req, (runId) => heartbeat.getRun(runId), issueService(db).getById);
 
     if (scope.isTaskBound) {
       if (!scope.boundIssueId) {
