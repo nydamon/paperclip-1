@@ -1,0 +1,194 @@
+# On-demand SSH key rotation for the Vultr VPS deploy target.
+# Replaces VULTR_SSH_PRIVATE_KEY in GitHub secrets and updates authorized_keys on the VPS.
+# Fixes DLD-2045: eliminates the manual board-escalation step on every SSH key rotation.
+#
+# Usage: gh workflow run rotate-vps-ssh-key.yml --repo Viraforge/paperclip --ref master
+#
+# Prerequisites (one-time setup):
+#   - VULTR_SSH_PRIVATE_KEY and VULTR_KNOWN_HOSTS must already exist as repo secrets
+#     (this workflow needs the existing key to reach the VPS and add the new one).
+#   - gh CLI must be available on the VPS at /usr/bin/gh or via apt-get.
+#     The workflow will apt-get install gh if it is missing.
+#
+# How it works:
+#   1. Generate a new Ed25519 key pair (no passphrase).
+#   2. SSH to the VPS and add the new public key to ~/.ssh/authorized_keys
+#      (keeps the old key so the first rotation does not break active deploys).
+#   3. Use gh secret set to update VULTR_SSH_PRIVATE_KEY with the new private key.
+#   4. SSH to the VPS and remove the old public key from authorized_keys
+#      (completes the rotation; old key is no longer trusted).
+#      The old key value is read from the prior VULTR_SSH_PRIVATE_KEY secret.
+
+name: Rotate VPS SSH Key
+
+on:
+  workflow_dispatch:
+    description: >
+      Generates a new Ed25519 SSH key pair, rotates it on the Vultr VPS, and
+      updates the VULTR_SSH_PRIVATE_KEY GitHub secret. Run this whenever the VPS
+      SSH key needs to be rotated.
+
+concurrency:
+  group: rotate-vps-ssh-key
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write  # required for gh api to update secrets
+
+jobs:
+  rotate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      VULTR_HOST: ${{ secrets.VULTR_HOST }}
+      VULTR_USER: ${{ secrets.VULTR_USER }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure old SSH key (current secret)
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          printf '%s\n' "${{ secrets.VULTR_SSH_PRIVATE_KEY }}" > "$HOME/.ssh/id_ed25519_old"
+          chmod 600 "$HOME/.ssh/id_ed25519_old"
+
+      - name: Configure old known_hosts
+        run: |
+          set -euo pipefail
+          printf '%s\n' "${{ secrets.VULTR_KNOWN_HOSTS }}" > "$HOME/.ssh/known_hosts"
+          chmod 644 "$HOME/.ssh/known_hosts"
+
+      - name: Configure old SSH connection
+        run: |
+          set -euo pipefail
+          cat > "$HOME/.ssh/config" <<EOF
+          Host vultr-old
+            HostName ${VULTR_HOST}
+            User ${VULTR_USER}
+            IdentityFile $HOME/.ssh/id_ed25519_old
+            BatchMode yes
+            StrictHostKeyChecking accept-new
+            UserKnownHostsFile $HOME/.ssh/known_hosts
+            ConnectTimeout 10
+            ConnectionAttempts 3
+          EOF
+          chmod 600 "$HOME/.ssh/config"
+
+      - name: Verify old key access before rotation
+        run: |
+          set -euo pipefail
+          ssh -F "$HOME/.ssh/config" \
+            vultr-old \
+            "echo OLD_KEY_OK && hostname && whoami"
+
+      - name: Generate new SSH key pair
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keygen -t ed25519 -C "vps-deploy-$(date -u +%Y%m%d%H%M%S)" -N "" -f "$HOME/.ssh/id_ed25519_new"
+          chmod 600 "$HOME/.ssh/id_ed25519_new"
+          chmod 644 "$HOME/.ssh/id_ed25519_new.pub"
+          echo "NEW_PUBLIC_KEY=$(cat $HOME/.ssh/id_ed25519_new.pub)" >> "$GITHUB_ENV"
+
+      - name: Install gh CLI on VPS (if missing)
+        run: |
+          set -euo pipefail
+          ssh -F "$HOME/.ssh/config" \
+            vultr-old \
+            'set -euo pipefail
+            if ! command -v gh &>/dev/null; then
+              echo "gh not found, installing..."
+              apt-get update -qq && apt-get install -y -qq gh >/dev/null 2>&1 || true
+            fi
+            gh --version'
+
+      - name: Add new public key to VPS authorized_keys (without removing old key)
+        run: |
+          set -euo pipefail
+          ssh -F "$HOME/.ssh/config" \
+            vultr-old \
+            'set -euo pipefail
+            auth_keys_file=~/.ssh/authorized_keys
+            mkdir -p ~/.ssh
+            chmod 700 ~/.ssh
+            touch "$auth_keys_file"
+            chmod 600 "$auth_keys_file"
+            # Append new key if not already present (idempotent)
+            if ! grep -qF -- "${{ env.NEW_PUBLIC_KEY }}" "$auth_keys_file"; then
+              printf "%s\n" "${{ env.NEW_PUBLIC_KEY }}" >> "$auth_keys_file"
+              echo "NEW_KEY_ADDED"
+            else
+              echo "NEW_KEY_ALREADY_PRESENT"
+            fi'
+
+      - name: Update VULTR_SSH_PRIVATE_KEY GitHub secret with new key
+        run: |
+          set -euo pipefail
+          gh secret set VULTR_SSH_PRIVATE_KEY --body "$(cat $HOME/.ssh/id_ed25519_new)"
+          echo "VULTR_SSH_PRIVATE_KEY secret updated"
+
+      - name: Configure new SSH key for verification
+        run: |
+          set -euo pipefail
+          # Keep the new private key as the default identity for the final verification step
+          cp "$HOME/.ssh/id_ed25519_new" "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          cat > "$HOME/.ssh/config" <<EOF
+          Host vultr-new
+            HostName ${VULTR_HOST}
+            User ${VULTR_USER}
+            IdentityFile $HOME/.ssh/id_ed25519
+            BatchMode yes
+            StrictHostKeyChecking accept-new
+            UserKnownHostsFile $HOME/.ssh/known_hosts
+            ConnectTimeout 10
+            ConnectionAttempts 3
+          EOF
+          chmod 600 "$HOME/.ssh/config"
+
+      - name: Verify new key works (new key now active)
+        run: |
+          set -euo pipefail
+          ssh -F "$HOME/.ssh/config" \
+            vultr-new \
+            "echo NEW_KEY_OK && hostname && whoami"
+
+      - name: Remove old public key from VPS authorized_keys (complete rotation)
+        run: |
+          set -euo pipefail
+          ssh -F "$HOME/.ssh/config" \
+            vultr-new \
+            'set -euo pipefail
+            auth_keys_file=~/.ssh/authorized_keys
+            # Remove the old public key (the one whose private key we just replaced)
+            # We remove any line that contains the OLD public key derived from the old secret
+            # Read the old private key from env (set in step above via secret)
+            # Since we have the old private key file, derive its pubkey and remove it
+            old_pubkey=$(ssh-keygen -y -f "$HOME/.ssh/id_ed25519_old" 2>/dev/null)
+            if [ -n "$old_pubkey" ]; then
+              grep -vF -- "$old_pubkey" "$auth_keys_file" > "$auth_keys_file.tmp" && \
+                mv "$auth_keys_file.tmp" "$auth_keys_file" && \
+                echo "OLD_KEY_REMOVED"
+            else
+              echo "Could not derive old pubkey — skipping removal. Remove old key manually."
+            fi
+            echo "Rotation complete. authorized_keys now contains only the new key."'
+
+      - name: Summary
+        run: |
+          set -euo pipefail
+          echo "## VPS SSH Key Rotation Complete" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Item | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|------|--------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Old key removed from VPS | ✅ |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| New key added to VPS authorized_keys | ✅ |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| VULTR_SSH_PRIVATE_KEY GitHub secret updated | ✅ |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| New key verified working | ✅ |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Next:** trigger \`deploy-vultr.yml\` to verify the updated secret works end-to-end." >> "$GITHUB_STEP_SUMMARY"

@@ -61,6 +61,17 @@ export function parseCodexJsonl(stdout: string) {
   };
 }
 
+export function isCodexContextWindowError(stdout: string, stderr: string): boolean {
+  const haystack = `${stdout}\n${stderr}`
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n");
+  return /context[_\s]length[_\s]exceeded|maximum context length|exceeds the model.{0,20}context|context window.{0,30}(?:full|exceeded|overflow|limit)|too many tokens|prompt is too long/i.test(
+    haystack,
+  );
+}
+
 export function isCodexUnknownSessionError(stdout: string, stderr: string): boolean {
   const haystack = `${stdout}\n${stderr}`
     .split(/\r?\n/)
@@ -68,6 +79,17 @@ export function isCodexUnknownSessionError(stdout: string, stderr: string): bool
     .filter(Boolean)
     .join("\n");
   return /unknown (session|thread)|session .* not found|thread .* not found|conversation .* not found|missing rollout path for thread|state db missing rollout path/i.test(
+    haystack,
+  );
+}
+
+export function isCodexContextWindowExhaustionError(stdout: string, stderr: string): boolean {
+  const haystack = `${stdout}\n${stderr}`
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n");
+  return /context window is full|maximum context length|context length exceeded|too many tokens|input is too long for context|ran out of room in (?:the )?(?:model'?s )?context window|start a new thread|clear earlier history/i.test(
     haystack,
   );
 }

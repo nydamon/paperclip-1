@@ -22,12 +22,14 @@ describe("openCode models", () => {
     ).rejects.toThrow("OpenCode requires `adapterConfig.model`");
   });
 
-  it("rejects when discovery cannot run for configured model", async () => {
+  it("degrades gracefully when discovery cannot run for configured model", async () => {
     process.env.PAPERCLIP_OPENCODE_COMMAND = "__paperclip_missing_opencode_command__";
+    // Discovery failure with no stale cache returns [] instead of throwing,
+    // allowing the agent to start and fail at runtime with a clear OpenCode error.
     await expect(
       ensureOpenCodeModelConfiguredAndAvailable({
         model: "openai/gpt-5",
       }),
-    ).rejects.toThrow("Failed to start command");
+    ).resolves.toEqual([]);
   });
 });

@@ -1,0 +1,65 @@
+name: Content Canary
+
+on:
+  # Run after every deploy completes
+  workflow_run:
+    workflows: ["Deploy Vultr"]
+    types: [completed]
+  # Run on schedule every 6 hours
+  schedule:
+    - cron: "0 */6 * * *"
+  # Manual trigger
+  workflow_dispatch:
+
+concurrency:
+  group: content-canary
+  cancel-in-progress: true
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run content canary (basic SEO signals)
+        id: canary
+        env:
+          CANARY_SITE_URL: "https://viracue.ai"
+        run: |
+          node scripts/content-canary.mjs | tee /tmp/canary-report.md
+        continue-on-error: true
+
+      - name: Run full blog audit sweep (10-point deterministic checklist)
+        id: sweep
+        env:
+          CANARY_SITE_URL: "https://viracue.ai"
+        run: |
+          node scripts/blog-audit-sweep.mjs | tee /tmp/sweep-report.md
+        continue-on-error: true
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: content-canary-report
+          path: |
+            /tmp/canary-report.md
+            /tmp/sweep-report.md
+          retention-days: 30
+
+      - name: Fail if any regression found
+        if: steps.canary.outcome == 'failure' || steps.sweep.outcome == 'failure'
+        run: |
+          echo "Content canary detected regressions — see report artifacts"
+          exit 1

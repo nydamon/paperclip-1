@@ -28,6 +28,38 @@ const sharedOpts = {
 
 export const logger = pino({
   level: "debug",
+  redact: [
+    // Request credential headers
+    "req.headers.authorization",
+    "req.headers.cookie",
+    "req.headers.Authorization",
+    "req.headers.Cookie",
+    "req.headers['x-api-key']",
+    "req.headers['x-paperclip-api-key']",
+    // Request body fields likely to contain credentials (reqBody is populated
+    // by customProps on 4xx+ responses — without redaction here, a mistyped
+    // login body or a webhook that includes credentials in JSON would leak
+    // to server.log at warn level).
+    "reqBody.password",
+    "reqBody.token",
+    "reqBody.secret",
+    "reqBody.apiKey",
+    "reqBody.api_key",
+    "reqBody.sessionToken",
+    "reqBody.refreshToken",
+    "reqBody.privateKey",
+    "reqBody.private_key",
+    "reqBody.clientSecret",
+    "reqBody.client_secret",
+    "reqBody.newPassword",
+    "reqBody.currentPassword",
+    // Common nested shapes in auth/login/signup payloads
+    "reqBody.credentials.password",
+    "reqBody.credentials.token",
+    "reqBody.auth.password",
+    "reqBody.auth.token",
+    "reqBody.user.password",
+  ],
 }, pino.transport({
   targets: [
     {

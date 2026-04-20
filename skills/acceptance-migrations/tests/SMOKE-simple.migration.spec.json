@@ -1,0 +1,10 @@
+{
+  "migrationSql": "CREATE TABLE SCHEMA.smoke_test (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name text NOT NULL); CREATE INDEX smoke_test_name_idx ON SCHEMA.smoke_test(name);",
+  "rollbackSql": "DROP INDEX IF EXISTS SCHEMA.smoke_test_name_idx; DROP TABLE IF EXISTS SCHEMA.smoke_test;",
+  "expectSchema": [
+    { "type": "table_exists", "table": "smoke_test" },
+    { "type": "column_exists", "table": "smoke_test", "column": "id" },
+    { "type": "column_exists", "table": "smoke_test", "column": "name" },
+    { "type": "index_exists", "name": "smoke_test_name_idx" }
+  ]
+}

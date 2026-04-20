@@ -71,7 +71,13 @@ export function activityService(db: Db) {
           createdAt: heartbeatRuns.createdAt,
           invocationSource: heartbeatRuns.invocationSource,
           usageJson: heartbeatRuns.usageJson,
-          resultJson: heartbeatRuns.resultJson,
+          resultJson: sql<Record<string, unknown> | null>`
+            CASE WHEN ${heartbeatRuns.resultJson} IS NOT NULL THEN
+              jsonb_strip_nulls(jsonb_build_object(
+                'summary', left(${heartbeatRuns.resultJson}->>'summary', 500),
+                'result',  left(${heartbeatRuns.resultJson}->>'result',  500)
+              ))
+            ELSE NULL END`.as("resultJson"),
         })
         .from(heartbeatRuns)
         .where(

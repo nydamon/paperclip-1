@@ -1,0 +1,47 @@
+name: Pipeline Watchdog
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 * * * *"
+
+concurrency:
+  group: pipeline-watchdog
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PAPERCLIP_BASE_URL: ${{ secrets.PAPERCLIP_BASE_URL }}
+      PAPERCLIP_API_KEY: ${{ secrets.PAPERCLIP_API_KEY }}
+      PAPERCLIP_COMPANY_ID: ${{ secrets.PAPERCLIP_COMPANY_ID }}
+      WATCHDOG_VIRACUE_PROJECT_ID: ${{ secrets.WATCHDOG_VIRACUE_PROJECT_ID || secrets.WATCHDOG_RTAA_PROJECT_ID }}
+      WATCHDOG_ROOT_ISSUES: ${{ secrets.WATCHDOG_ROOT_ISSUES }}
+      WATCHDOG_MIN_ACTIONABLE_AGE_SECONDS: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Run observe-only watchdog
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/pipeline-watchdog.mjs | tee pipeline-watchdog-report.md
+
+      - name: Upload watchdog report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-watchdog-report
+          path: pipeline-watchdog-report.md

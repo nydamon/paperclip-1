@@ -15,7 +15,9 @@ import { NewAgentDialog } from "./NewAgentDialog";
 import { ToastViewport } from "./ToastViewport";
 import { MobileBottomNav } from "./MobileBottomNav";
 import { WorktreeBanner } from "./WorktreeBanner";
+import { DevRestartBanner } from "./DevRestartBanner";
 import { useDialog } from "../context/DialogContext";
+import { GeneralSettingsProvider } from "../context/GeneralSettingsContext";
 import { usePanel } from "../context/PanelContext";
 import { useCompany } from "../context/CompanyContext";
 import { useSidebar } from "../context/SidebarContext";
@@ -23,11 +25,28 @@ import { useTheme } from "../context/ThemeContext";
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { useCompanyPageMemory } from "../hooks/useCompanyPageMemory";
 import { healthApi } from "../api/health";
+import { instanceSettingsApi } from "../api/instanceSettings";
 import { shouldSyncCompanySelectionFromRoute } from "../lib/company-selection";
+import {
+  DEFAULT_INSTANCE_SETTINGS_PATH,
+  normalizeRememberedInstanceSettingsPath,
+} from "../lib/instance-settings";
 import { queryKeys } from "../lib/queryKeys";
 import { cn } from "../lib/utils";
 import { NotFoundPage } from "../pages/NotFound";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+
+const INSTANCE_SETTINGS_MEMORY_KEY = "paperclip.lastInstanceSettingsPath";
+
+function readRememberedInstanceSettingsPath(): string {
+  if (typeof window === "undefined") return DEFAULT_INSTANCE_SETTINGS_PATH;
+  try {
+    return normalizeRememberedInstanceSettingsPath(window.localStorage.getItem(INSTANCE_SETTINGS_MEMORY_KEY));
+  } catch {
+    return DEFAULT_INSTANCE_SETTINGS_PATH;
+  }
+}
 
 export function Layout() {
   const { sidebarOpen, setSidebarOpen, toggleSidebar, isMobile } = useSidebar();
@@ -49,6 +68,7 @@ export function Layout() {
   const onboardingTriggered = useRef(false);
   const lastMainScrollTop = useRef(0);
   const [mobileNavVisible, setMobileNavVisible] = useState(true);
+  const [instanceSettingsTarget, setInstanceSettingsTarget] = useState<string>(() => readRememberedInstanceSettingsPath());
   const nextTheme = theme === "dark" ? "light" : "dark";
   const matchedCompany = useMemo(() => {
     if (!companyPrefix) return null;
@@ -61,7 +81,16 @@ export function Layout() {
     queryKey: queryKeys.health,
     queryFn: () => healthApi.get(),
     retry: false,
+    refetchInterval: (query) => {
+      const data = query.state.data as { devServer?: { enabled?: boolean } } | undefined;
+      return data?.devServer?.enabled ? 2000 : false;
+    },
+    refetchIntervalInBackground: true,
   });
+  const keyboardShortcutsEnabled = useQuery({
+    queryKey: queryKeys.instance.generalSettings,
+    queryFn: () => instanceSettingsApi.getGeneral(),
+  }).data?.keyboardShortcuts === true;
 
   useEffect(() => {
     if (companiesLoading || onboardingTriggered.current) return;
@@ -118,6 +147,7 @@ export function Layout() {
   useCompanyPageMemory();
 
   useKeyboardShortcuts({
+    enabled: keyboardShortcutsEnabled,
     onNewIssue: () => openNewIssue(),
     onToggleSidebar: toggleSidebar,
     onTogglePanel: togglePanel,
@@ -220,13 +250,29 @@ export function Layout() {
     };
   }, [isMobile]);
 
+  useEffect(() => {
+    if (!location.pathname.startsWith("/instance/settings/")) return;
+
+    const nextPath = normalizeRememberedInstanceSettingsPath(
+      `${location.pathname}${location.search}${location.hash}`,
+    );
+    setInstanceSettingsTarget(nextPath);
+
+    try {
+      window.localStorage.setItem(INSTANCE_SETTINGS_MEMORY_KEY, nextPath);
+    } catch {
+      // Ignore storage failures in restricted environments.
+    }
+  }, [location.hash, location.pathname, location.search]);
+
   return (
-    <div
+    <GeneralSettingsProvider value={{ keyboardShortcutsEnabled }}>
+      <div
       className={cn(
         "bg-background text-foreground pt-[env(safe-area-inset-top)]",
         isMobile ? "min-h-dvh" : "flex h-dvh flex-col overflow-hidden",
       )}
-    >
+      >
       <a
         href="#main-content"
         className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[200] focus:rounded-md focus:bg-background focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:shadow-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -234,8 +280,8 @@ export function Layout() {
         Skip to Main Content
       </a>
       <WorktreeBanner />
+      <DevRestartBanner devServer={health?.devServer} />
       <div className={cn("min-h-0 flex-1", isMobile ? "w-full" : "flex overflow-hidden")}>
-        {/* Mobile backdrop */}
         {isMobile && sidebarOpen && (
           <button
             type="button"
@@ -245,7 +291,6 @@ export function Layout() {
           />
         )}
 
-        {/* Combined sidebar area: company rail + inner sidebar + docs bar */}
         {isMobile ? (
           <div
             className={cn(
@@ -268,9 +313,17 @@ export function Layout() {
                   <BookOpen className="h-4 w-4 shrink-0" />
                   <span className="truncate">Documentation</span>
                 </a>
+                {health?.version && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="px-2 text-xs text-muted-foreground shrink-0 cursor-default">v</span>
+                    </TooltipTrigger>
+                    <TooltipContent>v{health.version}</TooltipContent>
+                  </Tooltip>
+                )}
                 <Button variant="ghost" size="icon-sm" className="text-muted-foreground shrink-0" asChild>
                   <Link
-                    to="/instance/settings"
+                    to={instanceSettingsTarget}
                     aria-label="Instance settings"
                     title="Instance settings"
                     onClick={() => {
@@ -318,9 +371,17 @@ export function Layout() {
                   <BookOpen className="h-4 w-4 shrink-0" />
                   <span className="truncate">Documentation</span>
                 </a>
+                {health?.version && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="px-2 text-xs text-muted-foreground shrink-0 cursor-default">v</span>
+                    </TooltipTrigger>
+                    <TooltipContent>v{health.version}</TooltipContent>
+                  </Tooltip>
+                )}
                 <Button variant="ghost" size="icon-sm" className="text-muted-foreground shrink-0" asChild>
                   <Link
-                    to="/instance/settings"
+                    to={instanceSettingsTarget}
                     aria-label="Instance settings"
                     title="Instance settings"
                     onClick={() => {
@@ -346,7 +407,6 @@ export function Layout() {
           </div>
         )}
 
-        {/* Main content */}
         <div className={cn("flex min-w-0 flex-col", isMobile ? "w-full" : "h-full flex-1")}>
           <div
             className={cn(
@@ -384,6 +444,7 @@ export function Layout() {
       <NewGoalDialog />
       <NewAgentDialog />
       <ToastViewport />
-    </div>
+      </div>
+    </GeneralSettingsProvider>
   );
 }
