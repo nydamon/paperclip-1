@@ -229,4 +229,82 @@ describe("sweepUnpickedAssignments", () => {
     const result = await heartbeat.sweepUnpickedAssignments();
     expect(result.retriggered).toBe(0);
   });
+
+  it("skips retrigger when a recent active heartbeat run exists for the same issue-agent pair", async () => {
+    // CEO ran the issue 5 minutes ago and the run is still "running" (agent is in-flight).
+    // The issue has executionRunId=null because the last run already finished and cleared it,
+    // but the agent has picked up a follow-up run. The sweep must NOT retrigger.
+    const { companyId, agentId, issueId } = await seedIssueFixture({
+      issueStatus: "todo",
+      agentStatus: "idle",
+    });
+
+    // Create a recent "running" heartbeat run for this issue-agent pair (5 min ago)
+    const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
+    await db.insert(heartbeatRuns).values({
+      id: randomUUID(),
+      companyId,
+      agentId,
+      status: "running",
+      source: "assignment",
+      startedAt: fiveMinAgo,
+      createdAt: fiveMinAgo,
+      contextSnapshot: { issueId },
+    });
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.sweepUnpickedAssignments();
+    expect(result.retriggered).toBe(0);
+
+    // Verify no wakeup was enqueued either
+    const wakeups = await db.select().from(agentWakeupRequests);
+    expect(wakeups.filter((w) => w.reason === "unpicked_assignment_retrigger")).toHaveLength(0);
+  });
+
+  it("skips retrigger for queued run as well as running run", async () => {
+    const { companyId, agentId, issueId } = await seedIssueFixture({
+      issueStatus: "todo",
+      agentStatus: "idle",
+    });
+
+    const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000);
+    await db.insert(heartbeatRuns).values({
+      id: randomUUID(),
+      companyId,
+      agentId,
+      status: "queued",
+      source: "assignment",
+      startedAt: null,
+      createdAt: tenMinAgo,
+      contextSnapshot: { issueId },
+    });
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.sweepUnpickedAssignments();
+    expect(result.retriggered).toBe(0);
+  });
+
+  it("retriggers when active run is older than 30-minute window", async () => {
+    const { companyId, agentId, issueId } = await seedIssueFixture({
+      issueStatus: "todo",
+      agentStatus: "idle",
+    });
+
+    // Create a "running" heartbeat run from 45 minutes ago (outside the 30-min guard window)
+    const fortyFiveMinAgo = new Date(Date.now() - 45 * 60 * 1000);
+    await db.insert(heartbeatRuns).values({
+      id: randomUUID(),
+      companyId,
+      agentId,
+      status: "running",
+      source: "assignment",
+      startedAt: fortyFiveMinAgo,
+      createdAt: fortyFiveMinAgo,
+      contextSnapshot: { issueId },
+    });
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.sweepUnpickedAssignments();
+    expect(result.retriggered).toBe(1);
+  });
 });

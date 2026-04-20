@@ -4889,6 +4889,32 @@ export function heartbeatService(db: Db) {
           continue;
         }
 
+        // Skip if there is a recent active heartbeat run for this issue-agent pair.
+        // This guards against phantom retriggering: a run completes and clears
+        // executionRunId, but the agent immediately picks up the same issue again
+        // (or a follow-up run). Without this check the sweeper fires a duplicate
+        // unpicked_assignment_retrigger while the agent is already in-flight.
+        const recentActiveRunCutoff = new Date(now.getTime() - 30 * 60 * 1000);
+        const [activeRun] = await db
+          .select({ id: heartbeatRuns.id })
+          .from(heartbeatRuns)
+          .where(
+            and(
+              eq(heartbeatRuns.agentId, issue.assigneeAgentId),
+              inArray(heartbeatRuns.status, ["queued", "running"]),
+              sql`${heartbeatRuns.contextSnapshot}->>'issueId' = ${issue.id}`,
+              gte(heartbeatRuns.createdAt, recentActiveRunCutoff),
+            ),
+          )
+          .limit(1);
+        if (activeRun) {
+          logger.info(
+            { issueId: issue.id, agentId: issue.assigneeAgentId },
+            "skipping unpicked retrigger — agent has a recent in-flight run for this issue",
+          );
+          continue;
+        }
+
         await db
           .update(issues)
           .set({
