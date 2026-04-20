@@ -74,6 +74,7 @@ export const updateIssueSchema = createIssueSchema.partial().extend({
   reopenEvidence: z.string().min(1).optional(),
   interrupt: z.boolean().optional(),
   hiddenAt: z.string().datetime().nullable().optional(),
+  deliverableType: z.string().optional().nullable(),
 });
 
 export type UpdateIssue = z.infer<typeof updateIssueSchema>;
