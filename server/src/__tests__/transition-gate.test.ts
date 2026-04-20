@@ -466,4 +466,65 @@ describe("routine execution self-close (DLD-3231)", () => {
     expect(res.status).toBe(422);
     expect(res.body.gate).toBe("comment_required");
   });
+
+  describe("deliverableType gateBlockCount reset (DLD-3465)", () => {
+    it("PATCH deliverableType null→value resets gateBlockCount to 0", async () => {
+      // Regression: setting deliverableType on a code issue used to NOT reset gateBlockCount,
+      // causing it to keep incrementing and agents to be skipped on wakeups.
+      const issue = makeIssue({ status: "in_progress", deliverableType: null, gateBlockCount: 1, executionWorkspaceId: "ws-1" });
+      mockIssueService.getById.mockResolvedValue(issue);
+      mockIssueService.update.mockImplementation(async (id: string, fields: Record<string, unknown>) => ({
+        ...issue,
+        ...fields,
+        gateBlockCount: fields.gateBlockCount as number,
+      }));
+
+      const res = await request(createAgentApp())
+        .patch(`/api/issues/${issue.id}`)
+        .send({ deliverableType: "report" });
+
+      expect(res.status).toBe(200);
+      expect(mockIssueService.update).toHaveBeenCalledWith(
+        issue.id,
+        expect.objectContaining({ gateBlockCount: 0, deliverableType: "report" }),
+      );
+      expect(res.body.gateBlockCount).toBe(0);
+    });
+
+    it("PATCH deliverableType value→null resets gateBlockCount to 0", async () => {
+      // Same logic: when deliverableType reverts, gateBlockCount resets.
+      const issue = makeIssue({ status: "in_progress", deliverableType: "report", gateBlockCount: 3, executionWorkspaceId: "ws-1" });
+      mockIssueService.getById.mockResolvedValue(issue);
+      mockIssueService.update.mockImplementation(async (id: string, fields: Record<string, unknown>) => ({
+        ...issue,
+        ...fields,
+        gateBlockCount: fields.gateBlockCount as number,
+      }));
+
+      const res = await request(createAgentApp())
+        .patch(`/api/issues/${issue.id}`)
+        .send({ deliverableType: null });
+
+      expect(res.status).toBe(200);
+      expect(mockIssueService.update).toHaveBeenCalledWith(
+        issue.id,
+        expect.objectContaining({ gateBlockCount: 0, deliverableType: null }),
+      );
+      expect(res.body.gateBlockCount).toBe(0);
+    });
+
+    it("PATCH deliverableType with no change is a no-op (no update called)", async () => {
+      // When deliverableType stays the same, the request is a no-op and update is not called.
+      const issue = makeIssue({ status: "in_progress", deliverableType: "report", gateBlockCount: 2, executionWorkspaceId: "ws-1" });
+      mockIssueService.getById.mockResolvedValue(issue);
+
+      const res = await request(createAgentApp())
+        .patch(`/api/issues/${issue.id}`)
+        .send({ deliverableType: "report" });
+
+      expect(res.status).toBe(200);
+      // No update should be called for no-op changes
+      expect(mockIssueService.update).not.toHaveBeenCalled();
+    });
+  });
 });
