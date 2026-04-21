@@ -4611,8 +4611,27 @@ export function heartbeatService(db: Db) {
      *
      * Agents paused by the `adapter_failed` circuit breaker (pauseReason set)
      * are NOT recovered — those represent real adapter problems.
+     *
+     * Bugfix (DLD-3596): Two failure modes could leave agents stuck despite
+     * the sweeper running:
+     * 1. Race with heartbeat transaction: the sweeper reads agents in error
+     *    state before the heartbeat's heartbeat_runs UPDATE has committed,
+     *    so `lastRun.errorCode` is NULL or stale. Skip condition: no recent
+     *    completed run with error_code='process_lost'.
+     * 2. Server restart with no retry queued: if `shouldRetry=false` the
+     *    heartbeat never enqueues a retry, OR if the server crashes before
+     *    `enqueueProcessLossRetry` is called, the agent has no pending wakeup
+     *    AND no failed run (the crash run is the only record). The sweeper
+     *    never sees error_code='process_lost' and skips the agent.
+     *
+     * The defensive check (STALE_RUN_THRESHOLD_MS) catches both: any agent in
+     * error state with a running run that hasn't heartbeat'd in 5 minutes is
+     * treated as process_lost regardless of the heartbeat_runs state.
      */
     async recoverProcessLostAgents() {
+      const STALE_RUN_THRESHOLD_MS = 5 * 60 * 1000; // matches reapOrphanedRuns staleness
+      const now = new Date();
+
       const errorAgents = await db
         .select({ id: agents.id, name: agents.name, pauseReason: agents.pauseReason })
         .from(agents)
@@ -4620,7 +4639,7 @@ export function heartbeatService(db: Db) {
 
       const recovered: string[] = [];
       for (const agent of errorAgents) {
-        // Check the most recent completed run for this agent.
+        // ── Primary path: most recent completed run has error_code='process_lost' ──
         const [lastRun] = await db
           .select({
             errorCode: heartbeatRuns.errorCode,
@@ -4636,17 +4655,74 @@ export function heartbeatService(db: Db) {
           .orderBy(desc(heartbeatRuns.finishedAt))
           .limit(1);
 
-        if (!lastRun || lastRun.errorCode !== "process_lost") continue;
+        if (lastRun?.errorCode === "process_lost") {
+          // Only recover if the failure is at least 30s old (avoid racing with
+          // the process_lost retry mechanism which may still be in flight).
+          const finishedAt = lastRun.finishedAt ? new Date(lastRun.finishedAt) : null;
+          if (!finishedAt || now.getTime() - finishedAt.getTime() < 30_000) continue;
+          await doRecover(agent);
+          continue;
+        }
 
-        // Only recover if the failure is at least 60s old (avoid racing with
-        // the process_lost retry mechanism which may still be in flight).
-        const finishedAt = lastRun.finishedAt ? new Date(lastRun.finishedAt) : null;
-        if (finishedAt && Date.now() - finishedAt.getTime() < 60_000) continue;
+        // ── Defensive path: no recent completed process_lost run ──
+        // Check for a stale 'running' run — heartbeat hasn't updated in 5+ min,
+        // meaning the heartbeat process itself crashed (server restart) and
+        // neither `reapOrphanedRuns` nor a retry could update the run status.
+        const [staleRun] = await db
+          .select({ id: heartbeatRuns.id, updatedAt: heartbeatRuns.updatedAt })
+          .from(heartbeatRuns)
+          .where(and(eq(heartbeatRuns.agentId, agent.id), eq(heartbeatRuns.status, "running")))
+          .orderBy(desc(heartbeatRuns.updatedAt))
+          .limit(1);
 
+        if (staleRun) {
+          const staleAgeMs = now.getTime() - new Date(staleRun.updatedAt).getTime();
+          if (staleAgeMs >= STALE_RUN_THRESHOLD_MS) {
+            // This run was left in 'running' state by a crashed heartbeat.
+            // Recover the agent — the heartbeat will pick it up on next tick
+            // and properly mark the run as failed/process_lost.
+            logger.warn(
+              { agentId: agent.id, agentName: agent.name, staleRunId: staleRun.id, staleAgeMs },
+              "recoverProcessLostAgents: agent in error with stale running run — force-recovering",
+            );
+            await doRecover(agent);
+          }
+          // else: run is still young (< 5 min), heartbeat may still be updating.
+          // Don't recover — let the heartbeat handle it normally.
+          continue;
+        }
+
+        // ── No completed process_lost run AND no stale running run ──
+        // Agent has been in error state with no heartbeat run evidence.
+        // This can happen when the heartbeat updated agent.status='error' but
+        // the server crashed before the heartbeat_runs UPDATE committed, OR when
+        // the heartbeat never created a retry (shouldRetry=false) and the crash
+        // run is the only record (but sweeper can't see it due to tx isolation).
+        // Recover after a generous delay (5 min) to avoid false positives.
+        // We use the agent's updatedAt as a proxy: if it hasn't changed in 5+
+        // minutes and it's in error state, it's genuinely stuck.
+        const agentStaleMs = now.getTime() - new Date(agent.updatedAt).getTime();
+        if (agentStaleMs >= STALE_RUN_THRESHOLD_MS) {
+          logger.warn(
+            { agentId: agent.id, agentName: agent.name, agentStaleMs },
+            "recoverProcessLostAgents: agent in error with no recent runs — force-recovering",
+          );
+          await doRecover(agent);
+        }
+      }
+
+      async function doRecover(agent: { id: string; name: string | null }) {
         await db
           .update(agents)
           .set({ status: "idle", updatedAt: new Date() })
           .where(eq(agents.id, agent.id));
+
+        // Clear stale session so the recovered agent starts fresh instead of
+        // resuming a half-finished LLM conversation from the crashed run.
+        await db
+          .update(agentRuntimeState)
+          .set({ sessionId: null, updatedAt: new Date() })
+          .where(eq(agentRuntimeState.agentId, agent.id));
 
         recovered.push(agent.name ?? agent.id);
 
