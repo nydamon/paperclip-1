@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
-import { and, asc, desc, eq, gte, gt, inArray, isNotNull, isNull, lte, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, gt, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import type { BillingType, ExecutionWorkspace, ExecutionWorkspaceConfig } from "@paperclipai/shared";
 import {
@@ -4518,15 +4518,24 @@ export function heartbeatService(db: Db) {
 
     async sweepUnpickedAssignments() {
       const UNPICKED_SLA_MS = 8 * 60 * 1000; // 8 minutes
-      const MAX_RETRIGGERS = 1;
+      const MAX_RETRIGGERS = 5;
+      const RETRIGGER_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes — auto-reset after this
+      const COMPLETED_DEBOUNCE_MS = 60 * 1000; // 1 minute — don't retrigger recently-completed issues
       const now = new Date();
       const cutoff = new Date(now.getTime() - UNPICKED_SLA_MS);
+      const cooldownCutoff = new Date(now.getTime() - RETRIGGER_COOLDOWN_MS);
+      const completedDebounceCutoff = new Date(now.getTime() - COMPLETED_DEBOUNCE_MS);
 
       const candidates = await db
         .select({
           id: issues.id,
           assigneeAgentId: issues.assigneeAgentId,
+          originKind: issues.originKind,
+          createdByAgentId: issues.createdByAgentId,
+          startedAt: issues.startedAt,
           activationRetriggerCount: issues.activationRetriggerCount,
+          updatedAt: issues.updatedAt,
+          completedAt: issues.completedAt,
         })
         .from(issues)
         .where(
@@ -4536,6 +4545,7 @@ export function heartbeatService(db: Db) {
             isNull(issues.executionRunId),
             isNull(issues.executionLockedAt),
             isNull(issues.checkoutRunId),
+            isNull(issues.hiddenAt), // ← FIX: exclude soft-deleted (hidden) issues
             lte(issues.updatedAt, cutoff),
           ),
         );
@@ -4543,7 +4553,41 @@ export function heartbeatService(db: Db) {
       const retriggered: string[] = [];
       for (const issue of candidates) {
         if (!issue.assigneeAgentId) continue;
+
+        // Auto-reset: if the counter maxed out but the issue has been stale for
+        // 30+ minutes, reset to 0 and let the sweeper try again. This prevents
+        // permanent orphaning when agents take longer than expected between runs
+        // or when process_lost burns through retriggers during deploy restarts.
+        if (
+          issue.activationRetriggerCount >= MAX_RETRIGGERS &&
+          new Date(issue.updatedAt).getTime() <= cooldownCutoff.getTime()
+        ) {
+          await db
+            .update(issues)
+            .set({ activationRetriggerCount: 0, updatedAt: now })
+            .where(eq(issues.id, issue.id));
+          logger.info(
+            { issueId: issue.id, previousCount: issue.activationRetriggerCount },
+            "auto-reset maxed retrigger counter after 30m cooldown",
+          );
+          // Don't retrigger in the same tick — let the next sweep cycle pick it up
+          // with a fresh counter so the agent gets a clean dispatch window.
+          continue;
+        }
+
         if (issue.activationRetriggerCount >= MAX_RETRIGGERS) continue;
+
+        // ← FIX: Don't retrigger recently-completed (done) issues.
+        // completedAt is set atomically when status transitions to done, so this
+        // is a reliable gate against race conditions where the issue transitions
+        // done between the SELECT and the enqueueWakeup call.
+        if (issue.completedAt && new Date(issue.completedAt).getTime() > completedDebounceCutoff.getTime()) {
+          logger.info(
+            { issueId: issue.id, completedAt: issue.completedAt },
+            "skipping retrigger — issue completed within the last minute",
+          );
+          continue;
+        }
 
         const [agent] = await db
           .select({ status: agents.status, pauseReason: agents.pauseReason })
@@ -4555,6 +4599,37 @@ export function heartbeatService(db: Db) {
           logger.warn(
             { issueId: issue.id, agentId: issue.assigneeAgentId, agentStatus: agent?.status },
             "unpicked assignment on non-dispatchable agent — skipping retrigger",
+          );
+          continue;
+        }
+
+        // ← FIX: Skip wakeups for agents that are already running — they will naturally
+        // pick up their own issue on the next routine heartbeat without being
+        // hammered by phantom retrigger cascades.
+        const runningRunCount = await countRunningRunsForAgent(issue.assigneeAgentId);
+        if (runningRunCount > 0) {
+          logger.info(
+            { issueId: issue.id, agentId: issue.assigneeAgentId },
+            "unpicked assignment on running agent — skipping retrigger",
+          );
+          continue;
+        }
+
+        // ← FIX (DLD-3623): Skip routine tasks that the assignee created and hasn't picked up yet.
+        // When a routine scheduler creates a routine_execution task and assigns it to the agent
+        // that runs the routine, the agent should pick it up naturally on its next heartbeat.
+        // The sweeper should NOT retrigger on these because:
+        //   1. The agent already owns the task (createdByAgentId = assigneeAgentId)
+        //   2. The task hasn't been checked out yet (startedAt = null)
+        //   3. Retriggering creates phantom wake cascades where Monitor wakes every heartbeat
+        //      on its own routine tasks and creates escalation issues for "phantom" unpicked tasks.
+        if (
+          issue.originKind === "routine_execution" &&
+          issue.startedAt === null
+        ) {
+          logger.info(
+            { issueId: issue.id, originKind: issue.originKind, startedAt: issue.startedAt },
+            "skipping routine_execution task that has not been picked up — agent will naturally handle it",
           );
           continue;
         }
@@ -4593,6 +4668,63 @@ export function heartbeatService(db: Db) {
       // No-op stub: orphaned workspace process reaping is not yet implemented.
       // Workspace runtime services are cleaned up via releaseRuntimeServicesForRun.
       return { reaped: 0 };
+    },
+
+    /**
+     * ← FIX (DLD-3621): Cancel queued heartbeat runs whose target issue has reached a
+     * terminal state (done/cancelled) OR whose target issue has been deleted entirely.
+     *
+     * This closes the phantom-wake gap: when sweepUnpickedAssignments fires enqueueWakeup
+     * for an issue that transitions to done between the SELECT and the queued-run creation,
+     * the orphaned queued run would previously sit for up to 5 minutes (next sweeper tick)
+     * before being cancelled. With this function running on EVERY tick (30s), orphaned
+     * queued runs are cleaned up within one tick of creation.
+     *
+     * LEFT JOIN + isNull(issues.id) catches the deleted-issue case that INNER JOIN
+     * silently skips, preventing orphaned queued runs that trigger phantom wakes.
+     */
+    async cancelQueuedRunsForTerminalIssues() {
+      const terminalStatuses = ["done", "cancelled"];
+
+      const staleRuns = await db
+        .select({
+          runId: heartbeatRuns.id,
+          agentId: heartbeatRuns.agentId,
+          issueId: sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'issueId'`,
+          issueStatus: issues.status,
+        })
+        .from(heartbeatRuns)
+        .leftJoin(
+          issues,
+          sql`(${heartbeatRuns.contextSnapshot} ->> 'issueId')::uuid = ${issues.id}`,
+        )
+        .where(
+          and(
+            eq(heartbeatRuns.status, "queued"),
+            // Include runs for deleted issues (issue.id is null) OR runs for issues
+            // in terminal states. LEFT JOIN produces NULL for the entire issues row
+            // when the issue is absent, so isNull(issues.id) correctly identifies
+            // orphaned runs.
+            or(isNull(issues.id), inArray(issues.status, terminalStatuses)),
+          ),
+        );
+
+      if (staleRuns.length === 0) return { cancelled: 0 };
+
+      const runIds = staleRuns.map((r) => r.runId);
+      await db
+        .update(heartbeatRuns)
+        .set({ status: "cancelled", finishedAt: new Date() })
+        .where(inArray(heartbeatRuns.id, runIds));
+
+      for (const run of staleRuns) {
+        logger.warn(
+          { runId: run.runId, agentId: run.agentId, issueId: run.issueId, issueStatus: run.issueStatus },
+          "cancelled queued run for terminal issue",
+        );
+      }
+      logger.info({ count: staleRuns.length }, "cancelled queued runs for terminal issues");
+      return { cancelled: staleRuns.length };
     },
 
     /**

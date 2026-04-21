@@ -117,6 +117,18 @@ describe("sweepUnpickedAssignments", () => {
     checkoutRunId?: string | null;
     updatedAt?: Date;
     activationRetriggerCount?: number;
+    /** When true, inserts a separate running heartbeat run for the agent (distinct from the issue's executionRunId). */
+    agentHasRunningRun?: boolean;
+    /** Sets completedAt — simulates a just-completed (done) issue. */
+    completedAt?: Date | null;
+    /** Sets hiddenAt — simulates a soft-deleted issue. */
+    hiddenAt?: Date | null;
+    /** Sets originKind — simulates a routine_execution issue. */
+    originKind?: string;
+    /** Sets startedAt — simulates a task that has been checked out. */
+    startedAt?: Date | null;
+    /** When originKind is 'routine_execution', optionally set createdByAgentId to simulate self-assigned routine task. */
+    createdByAgentId?: string | null;
   }) {
     const companyId = randomUUID();
     const agentId = randomUUID();
@@ -156,6 +168,20 @@ describe("sweepUnpickedAssignments", () => {
       });
     }
 
+    // Optionally insert a running heartbeat run for the agent itself (separate
+    // from the issue's executionRunId). This simulates the agent already being
+    // mid-dispatch so sweepUnpickedAssignments should skip the issue.
+    if (overrides?.agentHasRunningRun) {
+      await db.insert(heartbeatRuns).values({
+        id: randomUUID(),
+        companyId,
+        agentId,
+        status: "running",
+        source: "routine",
+        startedAt: new Date(),
+      });
+    }
+
     const nineMinutesAgo = new Date(Date.now() - 9 * 60 * 1000);
 
     await db.insert(issues).values({
@@ -169,8 +195,13 @@ describe("sweepUnpickedAssignments", () => {
       checkoutRunId: overrides?.checkoutRunId ?? null,
       updatedAt: overrides?.updatedAt ?? nineMinutesAgo,
       activationRetriggerCount: overrides?.activationRetriggerCount ?? 0,
+      completedAt: overrides?.completedAt ?? null,
+      hiddenAt: overrides?.hiddenAt ?? null,
       identifier: `${issuePrefix}-1`,
       issueNumber: 1,
+      originKind: overrides?.originKind ?? "manual",
+      startedAt: overrides?.startedAt ?? null,
+      createdByAgentId: overrides?.createdByAgentId ?? null,
     });
 
     return { companyId, agentId, issueId };
@@ -215,7 +246,39 @@ describe("sweepUnpickedAssignments", () => {
   });
 
   it("skips an issue that has reached max retrigger count", async () => {
-    await seedIssueFixture({ activationRetriggerCount: 1 });
+    await seedIssueFixture({ activationRetriggerCount: 5 }); // MAX_RETRIGGERS = 5
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.sweepUnpickedAssignments();
+    expect(result.retriggered).toBe(0);
+  });
+
+  it("skips a soft-deleted (hidden) issue", async () => {
+    // ← FIX (DLD-3621): hiddenAt is now filtered in the WHERE clause.
+    // Phantom wakes were caused by the sweeper picking up soft-deleted issues.
+    await seedIssueFixture({ hiddenAt: new Date() });
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.sweepUnpickedAssignments();
+    expect(result.retriggered).toBe(0);
+  });
+
+  it("skips an issue completed within the last minute (completedAt debounce)", async () => {
+    // ← FIX (DLD-3621): completedAt debounce prevents firing on recently-done issues.
+    // This closes the race condition where an issue transitions to done between
+    // the sweeper SELECT and the enqueueWakeup call.
+    await seedIssueFixture({ completedAt: new Date() }); // just now
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.sweepUnpickedAssignments();
+    expect(result.retriggered).toBe(0);
+  });
+
+  it("skips an issue whose assignee agent already has a running heartbeat run", async () => {
+    // ← FIX (DLD-3621): running-agent guard prevents hammering an agent that is
+    // already mid-dispatch — it will naturally pick up its own issue on the next
+    // routine heartbeat without needing an additional wakeup.
+    await seedIssueFixture({ agentHasRunningRun: true });
 
     const heartbeat = heartbeatService(db);
     const result = await heartbeat.sweepUnpickedAssignments();
@@ -228,5 +291,220 @@ describe("sweepUnpickedAssignments", () => {
     const heartbeat = heartbeatService(db);
     const result = await heartbeat.sweepUnpickedAssignments();
     expect(result.retriggered).toBe(0);
+  });
+
+  it("skips a routine_execution task that has not been picked up (originKind + startedAt null)", async () => {
+    // ← FIX (DLD-3623): When a routine scheduler creates a routine_execution task and assigns
+    // it to the agent that owns the routine, the sweeper should NOT retrigger on it.
+    // The agent will naturally pick up the task on its next routine heartbeat.
+    // Retriggering creates phantom wake cascades where Monitor wakes every heartbeat
+    // on its own routine tasks and creates escalation issues.
+    await seedIssueFixture({
+      originKind: "routine_execution",
+      startedAt: null,
+      createdByAgentId: null, // routine scheduler sets this to null
+    });
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.sweepUnpickedAssignments();
+    expect(result.retriggered).toBe(0);
+  });
+
+  it("still retriggers a routine_execution task that HAS been picked up (startedAt is set)", async () => {
+    // A routine task that was checked out but the agent lost it should still be retriggered.
+    await seedIssueFixture({
+      originKind: "routine_execution",
+      startedAt: new Date(), // agent checked it out — this is now a real unpicked issue
+      createdByAgentId: null,
+    });
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.sweepUnpickedAssignments();
+    expect(result.retriggered).toBe(1);
+  });
+});
+
+describe("cancelQueuedRunsForTerminalIssues", () => {
+  let db!: ReturnType<typeof createDb>;
+  let instance: EmbeddedPostgresInstance | null = null;
+  let dataDir = "";
+
+  beforeAll(async () => {
+    const started = await startTempDatabase();
+    db = createDb(started.connectionString);
+    instance = started.instance;
+    dataDir = started.dataDir;
+  }, 30_000);
+
+  afterEach(async () => {
+    await db.execute(
+      sql`TRUNCATE issues, heartbeat_run_events, heartbeat_runs, agent_wakeup_requests, agent_runtime_state, agent_task_sessions, company_skills, agents, companies CASCADE`,
+    );
+  });
+
+  afterAll(async () => {
+    await instance?.stop();
+    if (dataDir) {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("cancels queued run when the target issue has been deleted (phantom issue)", async () => {
+    // ← FIX (DLD-3621): Cancels queued runs pointing to issues that no longer exist
+    // in the DB. Without this, orphaned queued runs sit until the next 5-min sweep,
+    // causing phantom wakes on agents (e.g. Monitor waking on DLD-3618 which doesn't exist).
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const deletedIssueId = randomUUID(); // issue that will NOT be inserted
+    const runId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Test Co",
+      issuePrefix: "TST",
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "TestAgent",
+      role: "engineer",
+      status: "idle",
+      adapterType: "claude_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+
+    // Insert a queued run pointing to the non-existent issue ID
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      status: "queued",
+      source: "automation",
+      contextSnapshot: { issueId: deletedIssueId, source: "unpicked_assignment_retrigger" },
+    });
+
+    // Verify the run is queued before the fix
+    const [runBefore] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId));
+    expect(runBefore.status).toBe("queued");
+
+    // Verify the issue row does not exist
+    const issuesExist = await db.select().from(issues).where(eq(issues.id, deletedIssueId));
+    expect(issuesExist.length).toBe(0);
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.cancelQueuedRunsForTerminalIssues();
+
+    // The fix: LEFT JOIN + isNull(issues.id) must catch orphaned runs
+    expect(result.cancelled).toBe(1);
+
+    const [runAfter] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId));
+    expect(runAfter.status).toBe("cancelled");
+  });
+
+  it("cancels queued run when target issue is done", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const issueId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Test Co",
+      issuePrefix: "TST",
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "TestAgent",
+      role: "engineer",
+      status: "idle",
+      adapterType: "claude_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Done issue",
+      status: "done",
+      identifier: "TST-1",
+      issueNumber: 1,
+    });
+
+    const runId = randomUUID();
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      status: "queued",
+      source: "automation",
+      contextSnapshot: { issueId, source: "unpicked_assignment_retrigger" },
+    });
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.cancelQueuedRunsForTerminalIssues();
+
+    expect(result.cancelled).toBe(1);
+    const [runAfter] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId));
+    expect(runAfter.status).toBe("cancelled");
+  });
+
+  it("does not cancel queued run for non-terminal (active) issue", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const issueId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Test Co",
+      issuePrefix: "TST",
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "TestAgent",
+      role: "engineer",
+      status: "idle",
+      adapterType: "claude_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Active issue",
+      status: "todo",
+      identifier: "TST-1",
+      issueNumber: 1,
+    });
+
+    const runId = randomUUID();
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      status: "queued",
+      source: "automation",
+      contextSnapshot: { issueId, source: "unpicked_assignment_retrigger" },
+    });
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.cancelQueuedRunsForTerminalIssues();
+
+    // No cancellation — the issue is still active (todo/in_progress/blocked)
+    expect(result.cancelled).toBe(0);
+    const [runAfter] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId));
+    expect(runAfter.status).toBe("queued");
   });
 });
