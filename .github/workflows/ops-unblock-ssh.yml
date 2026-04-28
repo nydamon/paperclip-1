@@ -1,0 +1,58 @@
+name: Ops - Unblock SSH IP
+
+on:
+  workflow_dispatch:
+    inputs:
+      ip:
+        description: "IP address to unblock for SSH"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  unblock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          printf '%s\n' "${{ secrets.VULTR_SSH_PRIVATE_KEY }}" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "${{ secrets.VULTR_KNOWN_HOSTS }}" > "$HOME/.ssh/known_hosts"
+          chmod 644 "$HOME/.ssh/known_hosts"
+
+      - name: Unblock IP
+        run: |
+          set -euo pipefail
+          TARGET_IP="${{ github.event.inputs.ip }}"
+          echo "Unblocking $TARGET_IP on VPS..."
+          ssh \
+            -i "$HOME/.ssh/id_ed25519" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o ConnectTimeout=15 \
+            "${{ secrets.VULTR_USER }}@${{ secrets.VULTR_HOST }}" \
+            "bash -s" <<EOF
+          set -euo pipefail
+          echo "=== fail2ban status ==="
+          fail2ban-client status sshd 2>/dev/null || echo "fail2ban not running or sshd jail not found"
+          echo ""
+          echo "=== Unbanning $TARGET_IP from fail2ban ==="
+          fail2ban-client set sshd unbanip "$TARGET_IP" 2>/dev/null && echo "Unbanned from fail2ban" || echo "Not banned in fail2ban or fail2ban not active"
+          echo ""
+          echo "=== UFW rules for port 22 ==="
+          ufw status | grep -E "22|OpenSSH|ssh" || echo "No specific SSH rules"
+          echo ""
+          echo "=== Adding UFW allow for $TARGET_IP ==="
+          ufw allow from "$TARGET_IP" to any port 22 comment "manual-allow-$(date +%Y%m%d)" && echo "UFW rule added" || echo "UFW allow failed or already exists"
+          ufw status | grep "$TARGET_IP" || true
+          echo ""
+          echo "DONE"
+          EOF
